@@ -1,1 +1,3 @@
-openai==1.54.0
+# No external dependencies needed
+# Using urllib (built-in) to call OpenAI API directly
+
