@@ -2,7 +2,6 @@ from http.server import BaseHTTPRequestHandler
 import json
 import os
 from datetime import datetime, timedelta
-from openai import OpenAI
 
 class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
@@ -23,7 +22,8 @@ class handler(BaseHTTPRequestHandler):
         response = {
             "message": "SlotlyMed API with OpenAI is running!",
             "endpoint": "/api/schedule",
-            "status": "operational"
+            "status": "operational",
+            "version": "2.0"
         }
         self.wfile.write(json.dumps(response).encode())
     
@@ -88,7 +88,10 @@ class handler(BaseHTTPRequestHandler):
     
     def parse_with_openai(self, schedule_text):
         """Use OpenAI to parse schedule text"""
-        client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        import openai
+        
+        # Set API key directly
+        openai.api_key = os.getenv('OPENAI_API_KEY')
         
         prompt = f"""Extract scheduling information from this text and return ONLY valid JSON.
 
@@ -112,7 +115,7 @@ Rules:
 - If duration not mentioned, use 30 minutes
 - Return ONLY the JSON, no explanation"""
 
-        response = client.chat.completions.create(
+        response = openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a medical scheduling assistant. Always return valid JSON only."},
