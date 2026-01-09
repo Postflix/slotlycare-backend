@@ -2,6 +2,8 @@ from http.server import BaseHTTPRequestHandler
 import json
 import os
 from datetime import datetime, timedelta
+import urllib.request
+import urllib.error
 
 class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
@@ -23,7 +25,7 @@ class handler(BaseHTTPRequestHandler):
             "message": "SlotlyMed API with OpenAI is running!",
             "endpoint": "/api/schedule",
             "status": "operational",
-            "version": "2.0"
+            "version": "3.0-fixed"
         }
         self.wfile.write(json.dumps(response).encode())
     
@@ -54,7 +56,7 @@ class handler(BaseHTTPRequestHandler):
                 response = {
                     "success": True,
                     "message": "Schedule generated successfully!",
-                    "slots": slots,
+                    "slots": slots[:10],  # Return first 10 slots as preview
                     "schedule_data": schedule_data,
                     "total_slots": len(slots)
                 }
@@ -62,10 +64,10 @@ class handler(BaseHTTPRequestHandler):
                 self.send_success_response(response)
                 
             except Exception as ai_error:
-                self.send_error_response(500, f"AI processing error: {str(ai_error)}")
+                self.send_error_response(500, f"AI error: {str(ai_error)}")
             
         except Exception as e:
-            self.send_error_response(500, str(e))
+            self.send_error_response(500, f"Server error: {str(e)}")
     
     def validate_medical_context(self, text):
         """Validate if text is about medical scheduling"""
@@ -87,11 +89,11 @@ class handler(BaseHTTPRequestHandler):
         return keyword_count >= 2
     
     def parse_with_openai(self, schedule_text):
-        """Use OpenAI to parse schedule text"""
-        import openai
+        """Use OpenAI API directly via HTTP to avoid proxy issues"""
+        api_key = os.getenv('OPENAI_API_KEY')
         
-        # Set API key directly
-        openai.api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            raise ValueError("OpenAI API key not configured")
         
         prompt = f"""Extract scheduling information from this text and return ONLY valid JSON.
 
@@ -115,29 +117,53 @@ Rules:
 - If duration not mentioned, use 30 minutes
 - Return ONLY the JSON, no explanation"""
 
-        response = openai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
+        # Prepare request
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [
                 {"role": "system", "content": "You are a medical scheduling assistant. Always return valid JSON only."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.3,
-            max_tokens=500
-        )
+            "temperature": 0.3,
+            "max_tokens": 500
+        }
         
-        response_text = response.choices[0].message.content.strip()
-        
-        # Try to parse JSON
+        # Make request
         try:
-            return json.loads(response_text)
-        except json.JSONDecodeError:
-            # Try to extract JSON from markdown code blocks
-            import re
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group())
-            else:
-                raise ValueError("Could not parse AI response as JSON")
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode('utf-8'),
+                headers=headers,
+                method='POST'
+            )
+            
+            with urllib.request.urlopen(req) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                response_text = result['choices'][0]['message']['content'].strip()
+                
+                # Try to parse JSON
+                try:
+                    return json.loads(response_text)
+                except json.JSONDecodeError:
+                    # Try to extract JSON from markdown code blocks
+                    import re
+                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                    if json_match:
+                        return json.loads(json_match.group())
+                    else:
+                        raise ValueError(f"Could not parse AI response: {response_text}")
+                        
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode('utf-8')
+            raise ValueError(f"OpenAI API error: {error_body}")
+        except Exception as e:
+            raise ValueError(f"Request failed: {str(e)}")
     
     def generate_slots(self, schedule_data, num_days=30):
         """Generate appointment slots from schedule data"""
@@ -156,7 +182,7 @@ Rules:
                 days_of_week.append(DAY_MAP[day_lower])
         
         if not days_of_week:
-            raise ValueError("No valid days found")
+            raise ValueError("No valid days found in schedule")
         
         # Parse times
         start_time_str = schedule_data.get("start_time", "09:00")
