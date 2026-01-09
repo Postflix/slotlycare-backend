@@ -165,7 +165,7 @@ Rules:
         except Exception as e:
             raise ValueError(f"Request failed: {str(e)}")
     
-    def generate_slots(self, schedule_data, num_days=30):
+    def generate_slots(self, schedule_data, num_days=90):
         """Generate appointment slots from schedule data"""
         DAY_MAP = {
             "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
