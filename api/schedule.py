@@ -1,193 +1,168 @@
+"""
+SlotlyMed - AI Schedule Generation Endpoint (Vercel Compatible)
+"""
+
 from http.server import BaseHTTPRequestHandler
 import json
 import os
 from datetime import datetime, timedelta
-import urllib.request
-import urllib.error
 
 class handler(BaseHTTPRequestHandler):
-    def do_OPTIONS(self):
-        """Handle CORS preflight"""
-        self.send_response(200)
+    
+    def _set_headers(self, status=200):
+        """Set response headers with CORS"""
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
     
+    def do_OPTIONS(self):
+        """Handle CORS preflight"""
+        self._set_headers(200)
+    
     def do_GET(self):
-        """Handle GET requests"""
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        
+        """Handle GET requests - health check"""
+        self._set_headers(200)
         response = {
-            "message": "SlotlyMed API with OpenAI is running!",
+            "message": "SlotlyMed Schedule API is running",
             "endpoint": "/api/schedule",
             "status": "operational",
-            "version": "4.0-fixed-format"
+            "version": "5.0-vercel-compatible"
         }
         self.wfile.write(json.dumps(response).encode())
     
     def do_POST(self):
-        """Handle POST requests"""
+        """Handle POST requests - generate schedule"""
         try:
             # Read request body
-            content_length = int(self.headers['Content-Length'])
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length == 0:
+                self._send_error(400, "Empty request body")
+                return
+                
             body = self.rfile.read(content_length)
             data = json.loads(body.decode('utf-8'))
             
             schedule_text = data.get('schedule_text', '').strip()
             
             if not schedule_text:
-                self.send_error_response(400, "schedule_text is required")
+                self._send_error(400, "schedule_text is required")
                 return
             
             # Validate context (anti-abuse)
-            if not self.validate_medical_context(schedule_text):
-                self.send_error_response(400, "Invalid schedule description. Please describe your medical practice schedule.")
+            if not self._validate_schedule_text(schedule_text):
+                self._send_error(400, "Invalid schedule description. Please describe your medical practice schedule.")
                 return
             
-            # Process with OpenAI
+            # Generate slots with OpenAI
             try:
-                schedule_data = self.parse_with_openai(schedule_text)
-                slots = self.generate_slots(schedule_data)
+                slots = self._generate_slots_with_ai(schedule_text)
                 
+                self._set_headers(200)
                 response = {
                     "success": True,
                     "slots": slots,
                     "total_slots": len(slots)
                 }
-                
-                self.send_success_response(response)
+                self.wfile.write(json.dumps(response).encode())
                 
             except Exception as ai_error:
-                self.send_error_response(500, f"AI processing error: {str(ai_error)}")
+                self._send_error(500, f"AI processing error: {str(ai_error)}")
             
+        except json.JSONDecodeError:
+            self._send_error(400, "Invalid JSON in request body")
         except Exception as e:
-            self.send_error_response(500, f"Server error: {str(e)}")
+            self._send_error(500, f"Server error: {str(e)}")
     
-    def validate_medical_context(self, text):
-        """Validate if text is about medical scheduling - with anti-abuse"""
+    def _validate_schedule_text(self, text):
+        """Validate if text is about medical scheduling"""
         text_lower = text.lower()
         
-        # Block obviously non-medical requests
-        blocked_keywords = [
-            'recipe', 'receita', 'bolo', 'cake', 'cooking', 'cozinha',
-            'poem', 'poema', 'story', 'história', 'joke', 'piada'
-        ]
-        
-        for keyword in blocked_keywords:
-            if keyword in text_lower:
-                return False
+        # Block non-medical requests
+        blocked = ['recipe', 'receita', 'bolo', 'cake', 'poem', 'poema', 'story', 'história', 'joke', 'piada']
+        if any(word in text_lower for word in blocked):
+            return False
         
         # Check minimum length
         if len(text.strip()) < 10:
             return False
         
-        # Must have at least some scheduling-related terms
-        keywords = [
-            'atendo', 'consulta', 'horário', 'agenda', 'paciente',
-            'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
-            'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado', 'domingo',
-            'lunes', 'martes', 'miércoles', 'jueves', 'viernes',
-            'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi',
-            'montag', 'dienstag', 'mittwoch', 'donnerstag', 'freitag',
-            'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì',
-            'appointment', 'schedule', 'patient', 'slots', 'minutes', 'hours',
-            'cita', 'horario', 'rendez-vous', 'termin', 'appuntamento',
-            'am', 'pm', 'hour', 'time', 'break', 'lunch'
-        ]
-        
-        keyword_count = sum(1 for keyword in keywords if keyword in text_lower)
-        return keyword_count >= 1
+        return True
     
-    def parse_with_openai(self, schedule_text):
-        """Use OpenAI API directly via HTTP"""
+    def _generate_slots_with_ai(self, schedule_text):
+        """Generate slots using OpenAI API"""
+        import urllib.request
+        import re
+        
         api_key = os.getenv('OPENAI_API_KEY')
-        
         if not api_key:
-            raise ValueError("OpenAI API key not configured")
+            raise ValueError("OPENAI_API_KEY not configured")
         
-        prompt = f"""Extract scheduling information from this text and return ONLY valid JSON.
+        today = datetime.now()
+        today_str = today.strftime("%Y-%m-%d")
+        
+        # OpenAI prompt
+        prompt = f"""Extract scheduling information and return ONLY valid JSON.
 
 Text: "{schedule_text}"
 
-Return this exact structure:
+Return this exact JSON structure:
 {{
-    "days": ["Monday", "Tuesday", ...],
+    "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
     "start_time": "09:00",
     "end_time": "17:00",
     "slot_duration_minutes": 30,
-    "breaks": [
-        {{"start": "12:00", "end": "13:00", "name": "Lunch"}}
-    ]
+    "breaks": [{{"start": "12:00", "end": "13:00"}}]
 }}
 
 Rules:
-- Use English day names: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday
-- Use 24h format (HH:MM)
-- If no breaks mentioned, return empty array []
-- If duration not mentioned, use 30 minutes
-- Return ONLY the JSON object, no explanation or markdown"""
+- Use English day names
+- 24h format (HH:MM)
+- If no breaks, return empty array
+- If no duration specified, use 30 minutes
+- Return ONLY the JSON, no explanation"""
 
-        # Prepare request
+        # Call OpenAI
         url = "https://api.openai.com/v1/chat/completions"
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
         }
         
-        payload = {
+        payload = json.dumps({
             "model": "gpt-4o-mini",
             "messages": [
-                {"role": "system", "content": "You are a medical scheduling assistant. Always return valid JSON only, no markdown."},
+                {"role": "system", "content": "You are a scheduling assistant. Return valid JSON only."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.3,
             "max_tokens": 500
-        }
+        })
         
-        # Make request
+        req = urllib.request.Request(url, data=payload.encode(), headers=headers, method='POST')
+        
         try:
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode('utf-8'),
-                headers=headers,
-                method='POST'
-            )
-            
-            with urllib.request.urlopen(req) as response:
-                result = json.loads(response.read().decode('utf-8'))
-                response_text = result['choices'][0]['message']['content'].strip()
+            with urllib.request.urlopen(req, timeout=30) as response:
+                result = json.loads(response.read().decode())
+                ai_text = result['choices'][0]['message']['content'].strip()
                 
-                # Remove markdown code blocks if present
-                if response_text.startswith("```"):
-                    lines = response_text.split('\n')
-                    response_text = '\n'.join(lines[1:-1]) if len(lines) > 2 else response_text
-                    if response_text.startswith("json"):
-                        response_text = response_text[4:].strip()
+                # Clean markdown
+                if ai_text.startswith("```"):
+                    ai_text = re.sub(r'```(?:json)?\n?|\n?```', '', ai_text).strip()
                 
-                # Try to parse JSON
-                try:
-                    return json.loads(response_text)
-                except json.JSONDecodeError:
-                    # Try to extract JSON from text
-                    import re
-                    json_match = re.search(r'\{[^\}]+\}', response_text, re.DOTALL)
-                    if json_match:
-                        return json.loads(json_match.group())
-                    else:
-                        raise ValueError(f"Could not parse AI response: {response_text}")
-                        
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode('utf-8')
-            raise ValueError(f"OpenAI API error: {error_body}")
+                # Parse schedule data
+                schedule_data = json.loads(ai_text)
+                
+                # Generate slots from schedule data
+                return self._create_slots_from_schedule(schedule_data)
+                
         except Exception as e:
-            raise ValueError(f"Request failed: {str(e)}")
+            raise Exception(f"OpenAI API error: {str(e)}")
     
-    def generate_slots(self, schedule_data, num_days=90):
-        """Generate appointment slots from schedule data"""
+    def _create_slots_from_schedule(self, schedule_data):
+        """Create slot list from schedule data"""
         DAY_MAP = {
             "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
             "friday": 4, "saturday": 5, "sunday": 6
@@ -195,94 +170,75 @@ Rules:
         
         slots = []
         
-        # Convert day names to numbers
+        # Get days of week
         days_of_week = []
         for day_name in schedule_data.get("days", []):
-            day_lower = day_name.lower()
-            if day_lower in DAY_MAP:
-                days_of_week.append(DAY_MAP[day_lower])
+            day_num = DAY_MAP.get(day_name.lower())
+            if day_num is not None:
+                days_of_week.append(day_num)
         
         if not days_of_week:
-            raise ValueError("No valid days found in schedule")
+            raise ValueError("No valid days in schedule")
         
         # Parse times
-        start_time_str = schedule_data.get("start_time", "09:00")
-        end_time_str = schedule_data.get("end_time", "17:00")
-        slot_duration = schedule_data.get("slot_duration_minutes", 30)
+        start_time = schedule_data.get("start_time", "09:00")
+        end_time = schedule_data.get("end_time", "17:00")
+        duration = schedule_data.get("slot_duration_minutes", 30)
         
-        start_hour, start_minute = map(int, start_time_str.split(":"))
-        end_hour, end_minute = map(int, end_time_str.split(":"))
+        start_h, start_m = map(int, start_time.split(":"))
+        end_h, end_m = map(int, end_time.split(":"))
         
         # Parse breaks
         breaks = []
-        for break_info in schedule_data.get("breaks", []):
-            break_start = break_info.get("start", "")
-            break_end = break_info.get("end", "")
-            if break_start and break_end:
-                bh, bm = map(int, break_start.split(":"))
-                eh, em = map(int, break_end.split(":"))
-                breaks.append({
-                    "start": (bh * 60) + bm,
-                    "end": (eh * 60) + em
-                })
+        for brk in schedule_data.get("breaks", []):
+            if brk.get("start") and brk.get("end"):
+                bh, bm = map(int, brk["start"].split(":"))
+                eh, em = map(int, brk["end"].split(":"))
+                breaks.append({"start": bh * 60 + bm, "end": eh * 60 + em})
         
-        # Generate slots
+        # Generate 90 days of slots
         today = datetime.now().date()
         
-        for day_offset in range(num_days):
+        for day_offset in range(90):
             current_date = today + timedelta(days=day_offset)
             
             if current_date.weekday() not in days_of_week:
                 continue
             
-            current_time_minutes = (start_hour * 60) + start_minute
-            end_time_minutes = (end_hour * 60) + end_minute
+            time_minutes = start_h * 60 + start_m
+            end_minutes = end_h * 60 + end_m
             
-            while current_time_minutes < end_time_minutes:
+            while time_minutes < end_minutes:
                 # Check if in break
                 in_break = False
-                for break_info in breaks:
-                    if break_info["start"] <= current_time_minutes < break_info["end"]:
+                for brk in breaks:
+                    if brk["start"] <= time_minutes < brk["end"]:
+                        time_minutes = brk["end"]
                         in_break = True
-                        current_time_minutes = break_info["end"]
                         break
                 
-                if in_break:
+                if in_break or time_minutes >= end_minutes:
                     continue
                 
                 # Create slot
-                slot_hour = current_time_minutes // 60
-                slot_minute = current_time_minutes % 60
+                hour = time_minutes // 60
+                minute = time_minutes % 60
                 
-                # FORMAT CORRETO: {date, time, status}
-                slot = {
+                slots.append({
                     "date": current_date.strftime("%Y-%m-%d"),
-                    "time": f"{slot_hour:02d}:{slot_minute:02d}",
+                    "time": f"{hour:02d}:{minute:02d}",
                     "status": "available"
-                }
+                })
                 
-                slots.append(slot)
-                current_time_minutes += slot_duration
+                time_minutes += duration
         
         return slots
     
-    def send_success_response(self, data):
-        """Send successful JSON response"""
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
-    
-    def send_error_response(self, code, message):
-        """Send error JSON response"""
-        self.send_response(code)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        
-        error_response = {
+    def _send_error(self, code, message):
+        """Send error response"""
+        self._set_headers(code)
+        response = {
             "success": False,
             "error": message
         }
-        self.wfile.write(json.dumps(error_response).encode())
+        self.wfile.write(json.dumps(response).encode())
