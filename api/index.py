@@ -441,7 +441,8 @@ async def save_doctor(doctor: DoctorModel):
             'color': doctor.color,
             'language': doctor.language,
             'welcome_message': doctor.welcome_message or '',
-            'link': doctor.link
+            'link': doctor.link,
+            'customer_id': doctor.customer_id or ''
         }
         
         # Save doctor data
