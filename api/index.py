@@ -1,7 +1,7 @@
 """
-SlotlyMed Backend - FastAPI Unified API
+SlotlyCare Backend - FastAPI Unified API
 All endpoints centralized in one file for Vercel serverless deployment
-UPDATED: Now includes /api/schedule endpoint for AI schedule generation
+UPDATED: Now includes Stripe integration for payments and authentication
 """
 
 from fastapi import FastAPI, HTTPException, Request
@@ -12,8 +12,11 @@ from typing import Optional, List
 import sys
 import os
 import json
+import hashlib
+import secrets
 from datetime import datetime, timedelta, time
 from openai import OpenAI
+import stripe
 
 # Add parent directory to path to import sheets_client
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -21,9 +24,9 @@ from sheets_client import SheetsClient
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="SlotlyMed API",
-    description="Medical appointment scheduling system with AI-powered slot generation",
-    version="1.0.0"
+    title="SlotlyCare API",
+    description="Healthcare appointment scheduling system with AI-powered slot generation",
+    version="2.0.0"
 )
 
 # Configure CORS
@@ -37,6 +40,9 @@ app.add_middleware(
 
 # Initialize OpenAI client
 openai_client = OpenAI()
+
+# Initialize Stripe
+stripe.api_key = os.environ.get('STRIPE_SECRET_KEY')
 
 # ==================== PYDANTIC MODELS ====================
 
@@ -58,6 +64,7 @@ class DoctorModel(BaseModel):
     welcome_message: Optional[str] = ""
     link: str
     slots: Optional[List[SlotModel]] = []
+    customer_id: Optional[str] = ""  # Stripe customer ID
 
 class AppointmentModel(BaseModel):
     doctor_id: str
@@ -75,6 +82,19 @@ class Slot(BaseModel):
     date: str
     time: str
     status: str = "available"
+
+# Stripe and Auth models
+class CreateCheckoutRequest(BaseModel):
+    success_url: str
+    cancel_url: str
+
+class SetPasswordRequest(BaseModel):
+    customer_id: str
+    password: str
+
+class LoginRequest(BaseModel):
+    customer_id: str
+    password: str
 
 class ScheduleResponse(BaseModel):
     success: bool
@@ -547,6 +567,198 @@ async def book_appointment(appointment: AppointmentModel):
                 "time": appointment.time,
                 "patient_name": appointment.patient_name
             }
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+# ==================== STRIPE & AUTH ENDPOINTS ====================
+
+def hash_password(password: str) -> str:
+    """Hash password with SHA256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+@app.post("/api/create-checkout-session")
+async def create_checkout_session(request: CreateCheckoutRequest):
+    """
+    Create a Stripe Checkout session for subscription
+    """
+    try:
+        price_id = os.environ.get('STRIPE_PRICE_ID', 'price_1SpFPDRmTP4UQnz3uiYcFQON')
+        
+        checkout_session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price': price_id,
+                'quantity': 1,
+            }],
+            mode='subscription',
+            success_url=request.success_url + '?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url=request.cancel_url,
+        )
+        
+        return {
+            "success": True,
+            "checkout_url": checkout_session.url,
+            "session_id": checkout_session.id
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create checkout session: {str(e)}"
+        )
+
+@app.get("/api/checkout-session/{session_id}")
+async def get_checkout_session(session_id: str):
+    """
+    Get checkout session details after payment
+    """
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+        
+        return {
+            "success": True,
+            "customer_id": session.customer,
+            "customer_email": session.customer_details.email if session.customer_details else None,
+            "payment_status": session.payment_status,
+            "subscription_id": session.subscription
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve session: {str(e)}"
+        )
+
+@app.post("/api/set-password")
+async def set_password(request: SetPasswordRequest):
+    """
+    Set password for a customer after payment
+    """
+    try:
+        # Verify customer exists in Stripe
+        try:
+            customer = stripe.Customer.retrieve(request.customer_id)
+        except:
+            raise HTTPException(status_code=404, detail="Customer not found")
+        
+        # Hash password
+        password_hash = hash_password(request.password)
+        
+        # Save to Google Sheets (new tab: users)
+        sheets = SheetsClient()
+        result = sheets.save_user({
+            'customer_id': request.customer_id,
+            'email': customer.email,
+            'password_hash': password_hash,
+            'created_at': datetime.now().isoformat()
+        })
+        
+        if not result['success']:
+            raise HTTPException(status_code=500, detail="Failed to save user")
+        
+        return {
+            "success": True,
+            "message": "Password set successfully",
+            "customer_id": request.customer_id
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@app.post("/api/login")
+async def login(request: LoginRequest):
+    """
+    Verify customer_id and password
+    """
+    try:
+        sheets = SheetsClient()
+        user = sheets.get_user(request.customer_id)
+        
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+        # Verify password
+        password_hash = hash_password(request.password)
+        if user.get('password_hash') != password_hash:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+        # Verify Stripe subscription is active
+        try:
+            subscriptions = stripe.Subscription.list(customer=request.customer_id, status='active')
+            if not subscriptions.data:
+                raise HTTPException(status_code=403, detail="Subscription inactive")
+        except HTTPException:
+            raise
+        except:
+            # If Stripe check fails, allow access (for testing)
+            pass
+        
+        return {
+            "success": True,
+            "message": "Login successful",
+            "customer_id": request.customer_id,
+            "email": user.get('email')
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@app.get("/api/verify-subscription/{customer_id}")
+async def verify_subscription(customer_id: str):
+    """
+    Check if customer has active subscription
+    """
+    try:
+        subscriptions = stripe.Subscription.list(customer=customer_id, status='active')
+        
+        return {
+            "success": True,
+            "active": len(subscriptions.data) > 0,
+            "customer_id": customer_id
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to verify subscription: {str(e)}"
+        )
+
+@app.get("/api/get-appointments")
+async def get_appointments(customer_id: str):
+    """
+    Get all appointments for a doctor (by customer_id)
+    """
+    try:
+        sheets = SheetsClient()
+        
+        # First get doctor_id from customer_id
+        doctor = sheets.get_doctor_by_customer_id(customer_id)
+        if not doctor:
+            raise HTTPException(status_code=404, detail="Doctor not found")
+        
+        appointments = sheets.get_appointments(doctor['id'])
+        
+        return {
+            "success": True,
+            "appointments": appointments,
+            "count": len(appointments)
         }
     
     except HTTPException:
