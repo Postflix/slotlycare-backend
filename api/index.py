@@ -408,6 +408,39 @@ async def get_doctor(id: str):
             detail=f"Internal server error: {str(e)}"
         )
 
+@app.get("/api/get-doctor-by-customer")
+async def get_doctor_by_customer(customer_id: str):
+    """
+    Get doctor information by Stripe customer ID
+    
+    Parameters:
+    - customer_id: Stripe customer ID (e.g., "cus_xxxxx")
+    
+    Returns:
+    - Doctor data from Google Sheets
+    """
+    try:
+        sheets = SheetsClient()
+        doctor = sheets.get_doctor_by_customer_id(customer_id)
+        
+        if not doctor:
+            return {
+                "success": False,
+                "doctor": None,
+                "message": "No doctor found for this customer"
+            }
+        
+        return {
+            "success": True,
+            "doctor": doctor
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
 @app.post("/api/save-doctor")
 async def save_doctor(doctor: DoctorModel):
     """
@@ -422,16 +455,33 @@ async def save_doctor(doctor: DoctorModel):
     try:
         sheets = SheetsClient()
         
-        # Check if link is available
-        if not sheets.check_link_available(doctor.link, exclude_doctor_id=doctor.id):
+        # Determine if this is an update or new doctor
+        existing_doctor = None
+        doctor_id = doctor.id  # Default to provided ID (the link)
+        
+        # If customer_id is provided, check if doctor already exists
+        if doctor.customer_id:
+            existing_doctor = sheets.get_doctor_by_customer_id(doctor.customer_id)
+            if existing_doctor:
+                # Use existing doctor's ID for updates
+                doctor_id = existing_doctor['id']
+        
+        # Check if link is available (exclude current doctor if updating)
+        exclude_id = doctor_id if existing_doctor else None
+        if not sheets.check_link_available(doctor.link, exclude_doctor_id=exclude_id):
             raise HTTPException(
                 status_code=400,
                 detail="This link is already taken. Please choose another one."
             )
         
+        # If updating and link changed, we need to update the ID too
+        if existing_doctor and existing_doctor['link'] != doctor.link:
+            # The link is changing - use new link as new ID
+            doctor_id = doctor.link
+        
         # Prepare doctor data
         doctor_data = {
-            'id': doctor.id,
+            'id': doctor_id if not existing_doctor else existing_doctor['id'],
             'name': doctor.name,
             'specialty': doctor.specialty or '',
             'address': doctor.address,
@@ -458,7 +508,9 @@ async def save_doctor(doctor: DoctorModel):
         slots_saved = 0
         if doctor.slots:
             slots_data = [slot.dict() for slot in doctor.slots]
-            slots_result = sheets.save_availability(doctor.id, slots_data)
+            # Use the doctor's ID (which may be the old ID if updating)
+            save_id = doctor_data['id']
+            slots_result = sheets.save_availability(save_id, slots_data)
             
             if not slots_result['success']:
                 raise HTTPException(
@@ -471,8 +523,8 @@ async def save_doctor(doctor: DoctorModel):
         return {
             "success": True,
             "message": "Doctor configuration saved successfully",
-            "doctor_id": doctor.id,
-            "link": f"https://slotlymed.com/{doctor.link}",
+            "doctor_id": doctor_data['id'],
+            "link": f"https://slotlycare-frontend.vercel.app/{doctor.link}",
             "slots_saved": slots_saved
         }
     
