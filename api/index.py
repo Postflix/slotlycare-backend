@@ -245,17 +245,41 @@ def generate_slots(structure: dict) -> List[Slot]:
     schedule_data = structure.get("schedule", structure)
     default_config = schedule_data.get("default", schedule_data)
     overrides = schedule_data.get("overrides", [])
-    blocked_dates = set(schedule_data.get("blocked_dates", []))
     blocked_ranges = schedule_data.get("blocked_date_ranges", [])
+    
+    # Parse blocked_dates - handle both string and dict formats
+    blocked_dates = set()
+    raw_blocked = schedule_data.get("blocked_dates", [])
+    for item in raw_blocked:
+        if isinstance(item, str):
+            blocked_dates.add(item)
+        elif isinstance(item, dict):
+            # Handle {"date": "2026-01-25"} or {"start": "...", "end": "..."}
+            if "date" in item:
+                blocked_dates.add(item["date"])
+            elif "start" in item and "end" in item:
+                # It's actually a range
+                try:
+                    start = datetime.strptime(item["start"], "%Y-%m-%d").date()
+                    end = datetime.strptime(item["end"], "%Y-%m-%d").date()
+                    current = start
+                    while current <= end:
+                        blocked_dates.add(current.strftime("%Y-%m-%d"))
+                        current += timedelta(days=1)
+                except:
+                    pass
     
     # Parse blocked ranges
     for range_info in blocked_ranges:
-        start = datetime.strptime(range_info["start"], "%Y-%m-%d").date()
-        end = datetime.strptime(range_info["end"], "%Y-%m-%d").date()
-        current = start
-        while current <= end:
-            blocked_dates.add(current.strftime("%Y-%m-%d"))
-            current += timedelta(days=1)
+        try:
+            start = datetime.strptime(range_info["start"], "%Y-%m-%d").date()
+            end = datetime.strptime(range_info["end"], "%Y-%m-%d").date()
+            current = start
+            while current <= end:
+                blocked_dates.add(current.strftime("%Y-%m-%d"))
+                current += timedelta(days=1)
+        except:
+            pass
     
     # Day mapping
     day_mapping = {
@@ -263,12 +287,29 @@ def generate_slots(structure: dict) -> List[Slot]:
         "Friday": 4, "Saturday": 5, "Sunday": 6
     }
     
-    # Default config
-    default_days = [day_mapping[d] for d in default_config.get("days", [])]
-    default_start = time.fromisoformat(default_config.get("start_time", "09:00"))
-    default_end = time.fromisoformat(default_config.get("end_time", "17:00"))
+    # Default config with error handling
+    default_days = []
+    for d in default_config.get("days", []):
+        if d in day_mapping:
+            default_days.append(day_mapping[d])
+    
+    try:
+        default_start = time.fromisoformat(default_config.get("start_time", "09:00"))
+    except:
+        default_start = time.fromisoformat("09:00")
+    
+    try:
+        default_end = time.fromisoformat(default_config.get("end_time", "17:00"))
+    except:
+        default_end = time.fromisoformat("17:00")
+    
     default_duration = default_config.get("slot_duration_minutes", 30)
+    if not isinstance(default_duration, int) or default_duration < 5:
+        default_duration = 30
+    
     default_breaks = default_config.get("breaks", [])
+    if not isinstance(default_breaks, list):
+        default_breaks = []
     
     # Process overrides by day
     day_overrides = {}
@@ -323,20 +364,25 @@ def generate_slots(structure: dict) -> List[Slot]:
             if slot_end > end_of_day:
                 break
             
-            # Check breaks
+            # Check if slot overlaps with any break
             in_break = False
+            break_end_time = None
             for break_start, break_end in break_intervals:
+                # Check if current slot overlaps with this break
                 if not (current_slot_time.time() >= break_end or slot_end.time() <= break_start):
                     in_break = True
+                    break_end_time = break_end
                     break
             
-            if not in_break:
+            if in_break:
+                # Jump to the end of the break, not just the next slot
+                current_slot_time = datetime.combine(current_date, break_end_time)
+            else:
                 slots.append(Slot(
                     date=current_slot_time.strftime("%Y-%m-%d"),
                     time=current_slot_time.strftime("%H:%M")
                 ))
-            
-            current_slot_time = slot_end
+                current_slot_time = slot_end
         
         current_date += timedelta(days=1)
     
