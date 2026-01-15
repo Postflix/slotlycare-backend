@@ -2,6 +2,7 @@
 SlotlyCare Backend - FastAPI Unified API
 All endpoints centralized in one file for Vercel serverless deployment
 UPDATED: Now includes Stripe integration for payments and authentication
+FIXED: AI no longer invents breaks/lunch that weren't requested
 """
 
 from fastapi import FastAPI, HTTPException, Request
@@ -123,69 +124,114 @@ def get_schedule_structure_from_openai(text: str) -> dict:
     
     system_prompt = f'''You are a medical scheduling assistant. Today is {today.strftime("%Y-%m-%d")}.
 
-Your task: Generate a complete schedule for the next 180 days (until {end_date.strftime("%Y-%m-%d")}) based on the doctor's instructions.
+CRITICAL RULE: ONLY include what the user EXPLICITLY mentions. NEVER add anything they didn't ask for.
 
-IMPORTANT MULTILINGUAL SUPPORT:
-- Accept input in ANY language (English, Portuguese, Spanish, French, German, Italian, etc.)
-- User may write "Segunda a sexta" (Portuguese) or "Monday to Friday" (English)
-- User may write "Terça" or "Tuesday", "Sábado" or "Saturday"
-- Detect the language and interpret accordingly
-- ALWAYS return JSON in English format (day names in English)
+Your task: Extract schedule information from the doctor's text and return a JSON structure.
 
-Day name translations:
-- Monday = Segunda, Lunes, Lundi, Montag, Lunedì
-- Tuesday = Terça, Martes, Mardi, Dienstag, Martedì
-- Wednesday = Quarta, Miércoles, Mercredi, Mittwoch, Mercoledì
-- Thursday = Quinta, Jueves, Jeudi, Donnerstag, Giovedì
-- Friday = Sexta, Viernes, Vendredi, Freitag, Venerdì
-- Saturday = Sábado, Samedi, Samstag, Sabato
-- Sunday = Domingo, Dimanche, Sonntag, Domenica
+MULTILINGUAL SUPPORT - Accept input in ANY language:
+- Portuguese: Segunda, Terça, Quarta, Quinta, Sexta, Sábado, Domingo
+- Spanish: Lunes, Martes, Miércoles, Jueves, Viernes, Sábado, Domingo
+- French: Lundi, Mardi, Mercredi, Jeudi, Vendredi, Samedi, Dimanche
+- German: Montag, Dienstag, Mittwoch, Donnerstag, Freitag, Samstag, Sonntag
+- Italian: Lunedì, Martedì, Mercoledì, Giovedì, Venerdì, Sabato, Domenica
+- English: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday
 
-Handle ALL types of requests:
-- Regular weekly schedules
-- Blocked dates (vacations, conferences, specific weeks)
-- Day-specific hours
-- Partial day blocks
-- Breaks and lunch hours
-- Any other scheduling instruction
+ALWAYS output day names in English.
 
-Return JSON with this structure:
+STRICT RULES - READ CAREFULLY:
+1. BREAKS/LUNCH: ONLY add breaks if user EXPLICITLY mentions: "lunch", "almoço", "almuerzo", "pause", "break", "intervalo", "pausa". If they don't mention it, breaks must be an EMPTY array [].
+2. SLOT DURATION: Use what user says. If not mentioned, default to 30 minutes.
+3. BLOCKED DATES: Only if user mentions vacation, block, holiday, férias, bloquear, etc.
+4. OVERRIDES: Only if user specifies DIFFERENT hours for specific days.
+
+EXAMPLES:
+
+Input: "Segunda a sexta 9h-17h. Sábado 8h-12h. Consulta de 20 minutos"
+Output:
 {{
   "schedule": {{
     "default": {{
-      "days": ["Monday", "Tuesday", ...],
+      "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
       "start_time": "09:00",
       "end_time": "17:00",
+      "slot_duration_minutes": 20,
+      "breaks": []
+    }},
+    "overrides": [
+      {{"day": "Saturday", "start_time": "08:00", "end_time": "12:00", "slot_duration_minutes": 20, "breaks": []}}
+    ],
+    "blocked_dates": [],
+    "blocked_date_ranges": []
+  }}
+}}
+
+Input: "Monday to Friday 8am-6pm, lunch 12pm-1pm"
+Output:
+{{
+  "schedule": {{
+    "default": {{
+      "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+      "start_time": "08:00",
+      "end_time": "18:00",
       "slot_duration_minutes": 30,
       "breaks": [{{"start": "12:00", "end": "13:00"}}]
     }},
-    "overrides": [
-      {{"day": "Saturday", "start_time": "08:00", "end_time": "12:00"}}
-    ],
-    "blocked_dates": ["2026-03-17", "2026-03-18"],
+    "overrides": [],
+    "blocked_dates": [],
+    "blocked_date_ranges": []
+  }}
+}}
+
+Input: "Terça a sábado 10h-19h, consultas de 45 minutos"
+Output:
+{{
+  "schedule": {{
+    "default": {{
+      "days": ["Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+      "start_time": "10:00",
+      "end_time": "19:00",
+      "slot_duration_minutes": 45,
+      "breaks": []
+    }},
+    "overrides": [],
+    "blocked_dates": [],
+    "blocked_date_ranges": []
+  }}
+}}
+
+Input: "Segunda a sexta 9h-18h. Bloquear 20 de dezembro a 5 de janeiro para férias"
+Output:
+{{
+  "schedule": {{
+    "default": {{
+      "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+      "start_time": "09:00",
+      "end_time": "18:00",
+      "slot_duration_minutes": 30,
+      "breaks": []
+    }},
+    "overrides": [],
+    "blocked_dates": [],
     "blocked_date_ranges": [
-      {{"start": "2026-12-20", "end": "2026-01-05", "reason": "vacation"}}
+      {{"start": "2026-12-20", "end": "2027-01-05", "reason": "vacation"}}
     ]
   }}
 }}
 
-Rules:
-- ALWAYS use English day names in output: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday
-- Times in 24h format HH:MM
+REMEMBER: 
+- NO breaks unless explicitly requested
+- Times in 24h format (HH:MM)
 - Dates in YYYY-MM-DD format
-- If text mentions weeks (third week of March / terceira semana de março), calculate exact dates
-- If text says "block", "bloquear", "bloquer" - add to blocked_dates
-- If different hours per day - add to overrides
-- If no specific duration mentioned, use 30 minutes
-- Return ONLY valid JSON'''
+- Return ONLY valid JSON, nothing else'''
 
     response = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4-turbo",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": text}
         ],
-        response_format={"type": "json_object"}
+        response_format={"type": "json_object"},
+        temperature=0.1  # Lower temperature for more consistent/literal responses
     )
     return json.loads(response.choices[0].message.content)
 
@@ -328,7 +374,7 @@ async def test_endpoint():
 async def generate_schedule(request: ScheduleRequest):
     """
     Receives a natural language description of work hours,
-    uses OpenAI to analyze it, and generates 90 days of available appointment slots.
+    uses OpenAI to analyze it, and generates 180 days of available appointment slots.
     """
     # 1. Validation
     validation_error = validate_schedule_text(request.schedule_text)
