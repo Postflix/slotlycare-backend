@@ -63,6 +63,7 @@ class DoctorModel(BaseModel):
     color: str = "#3B82F6"
     language: str
     welcome_message: Optional[str] = ""
+    additional_info: Optional[str] = ""
     link: str
     slots: Optional[List[SlotModel]] = []
     customer_id: Optional[str] = ""  # Stripe customer ID
@@ -583,6 +584,7 @@ async def save_doctor(doctor: DoctorModel):
             'color': doctor.color,
             'language': doctor.language,
             'welcome_message': doctor.welcome_message or '',
+            'additional_info': doctor.additional_info or '',
             'link': doctor.link,
             'customer_id': doctor.customer_id or ''
         }
