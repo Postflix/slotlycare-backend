@@ -492,8 +492,12 @@ class SheetsClient:
                 }
             
             appointment = result.data[0]
-            apt_date = appointment['date']
-            apt_time = appointment['time']
+            apt_date = str(appointment['date'])
+            apt_time = str(appointment['time'])
+            
+            # Normalize time to HH:MM format (remove seconds if present)
+            if len(apt_time) > 5:
+                apt_time = apt_time[:5]
             
             # Delete the appointment
             self.supabase.table('appointments').delete().eq('id', appointment_id).execute()
@@ -506,8 +510,8 @@ class SheetsClient:
             return {
                 'success': True,
                 'message': 'Appointment cancelled',
-                'date': str(apt_date),
-                'time': str(apt_time)
+                'date': apt_date,
+                'time': apt_time
             }
         
         except Exception as e:
