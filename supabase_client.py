@@ -469,3 +469,50 @@ class SheetsClient:
         except Exception as e:
             print(f"Error getting appointments: {e}")
             return []
+    
+    def cancel_appointment(self, appointment_id, doctor_id):
+        """
+        Cancel an appointment and release the time slot
+        
+        Args:
+            appointment_id (str): Appointment ID to cancel
+            doctor_id (str): Doctor ID (for verification)
+        
+        Returns:
+            dict: Success status with date/time info
+        """
+        try:
+            # First get the appointment to know the date/time
+            result = self.supabase.table('appointments').select('*').eq('id', appointment_id).eq('doctor_id', doctor_id).execute()
+            
+            if not result.data or len(result.data) == 0:
+                return {
+                    'success': False,
+                    'error': 'Appointment not found'
+                }
+            
+            appointment = result.data[0]
+            apt_date = appointment['date']
+            apt_time = appointment['time']
+            
+            # Delete the appointment
+            self.supabase.table('appointments').delete().eq('id', appointment_id).execute()
+            
+            # Release the time slot (change status back to available)
+            self.supabase.table('availability').update({
+                'status': 'available'
+            }).eq('doctor_id', doctor_id).eq('date', apt_date).eq('time', apt_time).execute()
+            
+            return {
+                'success': True,
+                'message': 'Appointment cancelled',
+                'date': str(apt_date),
+                'time': str(apt_time)
+            }
+        
+        except Exception as e:
+            print(f"Error cancelling appointment: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
