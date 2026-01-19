@@ -926,6 +926,47 @@ async def get_appointments(customer_id: str):
             detail=f"Internal server error: {str(e)}"
         )
 
+class CancelAppointmentRequest(BaseModel):
+    customer_id: str
+    appointment_id: str
+
+@app.post("/api/cancel-appointment")
+async def cancel_appointment(request: CancelAppointmentRequest):
+    """
+    Cancel an appointment and release the time slot
+    """
+    try:
+        sheets = SheetsClient()
+        
+        # Get doctor by customer_id
+        doctor = sheets.get_doctor_by_customer_id(request.customer_id)
+        if not doctor:
+            raise HTTPException(status_code=404, detail="Doctor not found")
+        
+        # Cancel the appointment
+        result = sheets.cancel_appointment(request.appointment_id, doctor['id'])
+        
+        if not result['success']:
+            raise HTTPException(
+                status_code=400,
+                detail=result.get('error', 'Failed to cancel appointment')
+            )
+        
+        return {
+            "success": True,
+            "message": "Appointment cancelled successfully",
+            "date": result['date'],
+            "time": result['time']
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
 # ==================== EXCEPTION HANDLERS ====================
 
 @app.exception_handler(HTTPException)
