@@ -114,6 +114,7 @@ class SheetsClient:
                     'color': row.get('color', '#3B82F6'),
                     'language': row.get('language', 'en'),
                     'welcome_message': row.get('welcome_message', ''),
+                    'additional_info': row.get('additional_info', ''),
                     'link': row.get('link', ''),
                     'customer_id': row.get('customer_id', '')
                 }
@@ -150,6 +151,7 @@ class SheetsClient:
                     'color': row.get('color', '#3B82F6'),
                     'language': row.get('language', 'en'),
                     'welcome_message': row.get('welcome_message', ''),
+                    'additional_info': row.get('additional_info', ''),
                     'link': row.get('link', ''),
                     'customer_id': row.get('customer_id', '')
                 }
