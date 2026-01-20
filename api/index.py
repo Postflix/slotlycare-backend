@@ -95,8 +95,13 @@ class SetPasswordRequest(BaseModel):
     password: str
 
 class LoginRequest(BaseModel):
-    customer_id: str
+    email: str
     password: str
+
+class AdminResetPasswordRequest(BaseModel):
+    admin_key: str
+    email: str
+    new_password: str
 
 class ScheduleResponse(BaseModel):
     success: bool
@@ -837,11 +842,11 @@ async def set_password(request: SetPasswordRequest):
 @app.post("/api/login")
 async def login(request: LoginRequest):
     """
-    Verify customer_id and password
+    Verify email and password
     """
     try:
         sheets = SheetsClient()
-        user = sheets.get_user(request.customer_id)
+        user = sheets.get_user_by_email(request.email)
         
         if not user:
             raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -851,9 +856,11 @@ async def login(request: LoginRequest):
         if user.get('password_hash') != password_hash:
             raise HTTPException(status_code=401, detail="Invalid credentials")
         
+        customer_id = user.get('customer_id')
+        
         # Verify Stripe subscription is active
         try:
-            subscriptions = stripe.Subscription.list(customer=request.customer_id, status='active')
+            subscriptions = stripe.Subscription.list(customer=customer_id, status='active')
             if not subscriptions.data:
                 raise HTTPException(status_code=403, detail="Subscription inactive")
         except HTTPException:
@@ -865,8 +872,48 @@ async def login(request: LoginRequest):
         return {
             "success": True,
             "message": "Login successful",
-            "customer_id": request.customer_id,
+            "customer_id": customer_id,
             "email": user.get('email')
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+# Admin key - em produção, usar variável de ambiente
+ADMIN_KEY = os.environ.get('ADMIN_KEY', 'slotlycare-admin-2026')
+
+@app.post("/api/admin-reset-password")
+async def admin_reset_password(request: AdminResetPasswordRequest):
+    """
+    Admin endpoint to reset user password
+    """
+    try:
+        # Verify admin key
+        if request.admin_key != ADMIN_KEY:
+            raise HTTPException(status_code=401, detail="Invalid admin key")
+        
+        sheets = SheetsClient()
+        
+        # Check if user exists
+        user = sheets.get_user_by_email(request.email)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Hash new password and update
+        new_password_hash = hash_password(request.new_password)
+        result = sheets.update_user_password(request.email, new_password_hash)
+        
+        if not result['success']:
+            raise HTTPException(status_code=500, detail=result.get('error', 'Failed to update password'))
+        
+        return {
+            "success": True,
+            "message": f"Password reset successfully for {request.email}"
         }
     
     except HTTPException:
