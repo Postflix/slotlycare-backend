@@ -103,6 +103,11 @@ class AdminResetPasswordRequest(BaseModel):
     email: str
     new_password: str
 
+class ChangePasswordRequest(BaseModel):
+    customer_id: str
+    current_password: str
+    new_password: str
+
 class ScheduleResponse(BaseModel):
     success: bool
     slots: List[Slot]
@@ -914,6 +919,44 @@ async def admin_reset_password(request: AdminResetPasswordRequest):
         return {
             "success": True,
             "message": f"Password reset successfully for {request.email}"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@app.post("/api/change-password")
+async def change_password(request: ChangePasswordRequest):
+    """
+    Change user password (user must know current password)
+    """
+    try:
+        sheets = SheetsClient()
+        
+        # Get user by customer_id
+        user = sheets.get_user(request.customer_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Verify current password
+        current_hash = hash_password(request.current_password)
+        if user.get('password_hash') != current_hash:
+            raise HTTPException(status_code=401, detail="Current password is incorrect")
+        
+        # Update to new password
+        new_hash = hash_password(request.new_password)
+        result = sheets.update_user_password(user.get('email'), new_hash)
+        
+        if not result['success']:
+            raise HTTPException(status_code=500, detail=result.get('error', 'Failed to update password'))
+        
+        return {
+            "success": True,
+            "message": "Password changed successfully"
         }
     
     except HTTPException:
