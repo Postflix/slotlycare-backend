@@ -95,18 +95,8 @@ class SetPasswordRequest(BaseModel):
     password: str
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-class AdminResetPasswordRequest(BaseModel):
-    admin_key: str
-    email: str
-    new_password: str
-
-class ChangePasswordRequest(BaseModel):
     customer_id: str
-    current_password: str
-    new_password: str
+    password: str
 
 class ScheduleResponse(BaseModel):
     success: bool
@@ -578,14 +568,13 @@ async def save_doctor(doctor: DoctorModel):
             )
         
         # If updating and link changed, we need to update the ID too
-        new_doctor_id = None
         if existing_doctor and existing_doctor['link'] != doctor.link:
             # The link is changing - use new link as new ID
-            new_doctor_id = doctor.link
+            doctor_id = doctor.link
         
         # Prepare doctor data
         doctor_data = {
-            'id': new_doctor_id if new_doctor_id else (existing_doctor['id'] if existing_doctor else doctor_id),
+            'id': doctor_id if not existing_doctor else existing_doctor['id'],
             'name': doctor.name,
             'specialty': doctor.specialty or '',
             'address': doctor.address,
@@ -599,15 +588,6 @@ async def save_doctor(doctor: DoctorModel):
             'link': doctor.link,
             'customer_id': doctor.customer_id or ''
         }
-        
-        # If link changed, we need to delete old record and create new one
-        if new_doctor_id and existing_doctor:
-            # Delete old doctor record
-            sheets.supabase.table('doctors').delete().eq('id', existing_doctor['id']).execute()
-            # Also update availability to use new doctor_id
-            sheets.supabase.table('availability').update({'doctor_id': new_doctor_id}).eq('doctor_id', existing_doctor['id']).execute()
-            # Also update appointments to use new doctor_id
-            sheets.supabase.table('appointments').update({'doctor_id': new_doctor_id}).eq('doctor_id', existing_doctor['id']).execute()
         
         # Save doctor data
         doctor_result = sheets.save_doctor(doctor_data)
@@ -764,9 +744,10 @@ async def create_checkout_session(request: CreateCheckoutRequest):
                 'price': price_id,
                 'quantity': 1,
             }],
-            mode='subscription',
+            mode='payment',
             success_url=request.success_url + '?session_id={CHECKOUT_SESSION_ID}',
             cancel_url=request.cancel_url,
+            allow_promotion_codes=True,
         )
         
         return {
@@ -794,7 +775,7 @@ async def get_checkout_session(session_id: str):
             "customer_id": session.customer,
             "customer_email": session.customer_details.email if session.customer_details else None,
             "payment_status": session.payment_status,
-            "subscription_id": session.subscription
+            "payment_intent": session.payment_intent
         }
     
     except Exception as e:
@@ -847,11 +828,11 @@ async def set_password(request: SetPasswordRequest):
 @app.post("/api/login")
 async def login(request: LoginRequest):
     """
-    Verify email and password
+    Verify customer_id and password
     """
     try:
         sheets = SheetsClient()
-        user = sheets.get_user_by_email(request.email)
+        user = sheets.get_user(request.customer_id)
         
         if not user:
             raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -861,102 +842,15 @@ async def login(request: LoginRequest):
         if user.get('password_hash') != password_hash:
             raise HTTPException(status_code=401, detail="Invalid credentials")
         
-        customer_id = user.get('customer_id')
-        
-        # Verify Stripe subscription is active
-        try:
-            subscriptions = stripe.Subscription.list(customer=customer_id, status='active')
-            if not subscriptions.data:
-                raise HTTPException(status_code=403, detail="Subscription inactive")
-        except HTTPException:
-            raise
-        except:
-            # If Stripe check fails, allow access (for testing)
-            pass
+        # For one-time payment model, we just check if user exists in our database
+        # (they were added after successful payment)
+        # In the future, you can add expiration date check here for 3-year access
         
         return {
             "success": True,
             "message": "Login successful",
-            "customer_id": customer_id,
+            "customer_id": request.customer_id,
             "email": user.get('email')
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
-
-# Admin key - em produção, usar variável de ambiente
-ADMIN_KEY = os.environ.get('ADMIN_KEY', 'slotlycare-admin-2026')
-
-@app.post("/api/admin-reset-password")
-async def admin_reset_password(request: AdminResetPasswordRequest):
-    """
-    Admin endpoint to reset user password
-    """
-    try:
-        # Verify admin key
-        if request.admin_key != ADMIN_KEY:
-            raise HTTPException(status_code=401, detail="Invalid admin key")
-        
-        sheets = SheetsClient()
-        
-        # Check if user exists
-        user = sheets.get_user_by_email(request.email)
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        
-        # Hash new password and update
-        new_password_hash = hash_password(request.new_password)
-        result = sheets.update_user_password(request.email, new_password_hash)
-        
-        if not result['success']:
-            raise HTTPException(status_code=500, detail=result.get('error', 'Failed to update password'))
-        
-        return {
-            "success": True,
-            "message": f"Password reset successfully for {request.email}"
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
-
-@app.post("/api/change-password")
-async def change_password(request: ChangePasswordRequest):
-    """
-    Change user password (user must know current password)
-    """
-    try:
-        sheets = SheetsClient()
-        
-        # Get user by customer_id
-        user = sheets.get_user(request.customer_id)
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        
-        # Verify current password
-        current_hash = hash_password(request.current_password)
-        if user.get('password_hash') != current_hash:
-            raise HTTPException(status_code=401, detail="Current password is incorrect")
-        
-        # Update to new password
-        new_hash = hash_password(request.new_password)
-        result = sheets.update_user_password(user.get('email'), new_hash)
-        
-        if not result['success']:
-            raise HTTPException(status_code=500, detail=result.get('error', 'Failed to update password'))
-        
-        return {
-            "success": True,
-            "message": "Password changed successfully"
         }
     
     except HTTPException:
@@ -1006,47 +900,6 @@ async def get_appointments(customer_id: str):
             "success": True,
             "appointments": appointments,
             "count": len(appointments)
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
-
-class CancelAppointmentRequest(BaseModel):
-    customer_id: str
-    appointment_id: str
-
-@app.post("/api/cancel-appointment")
-async def cancel_appointment(request: CancelAppointmentRequest):
-    """
-    Cancel an appointment and release the time slot
-    """
-    try:
-        sheets = SheetsClient()
-        
-        # Get doctor by customer_id
-        doctor = sheets.get_doctor_by_customer_id(request.customer_id)
-        if not doctor:
-            raise HTTPException(status_code=404, detail="Doctor not found")
-        
-        # Cancel the appointment
-        result = sheets.cancel_appointment(request.appointment_id, doctor['id'])
-        
-        if not result['success']:
-            raise HTTPException(
-                status_code=400,
-                detail=result.get('error', 'Failed to cancel appointment')
-            )
-        
-        return {
-            "success": True,
-            "message": "Appointment cancelled successfully",
-            "date": result['date'],
-            "time": result['time']
         }
     
     except HTTPException:
