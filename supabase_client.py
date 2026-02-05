@@ -573,3 +573,50 @@ class SheetsClient:
                 'success': False,
                 'error': str(e)
             }
+    
+    # ==================== REFERRALS METHODS ====================
+    
+    def save_referral(self, referral_data):
+        """
+        Save a referral (colleague recommendation)
+        
+        Args:
+            referral_data (dict):
+                - referrer_customer_id: Stripe customer ID of who is referring
+                - referrer_doctor_link: doctor link of who is referring
+                - referred_name: name of the referred colleague
+                - referred_email: email of the referred colleague
+                - referred_specialty: specialty (optional)
+                - message: optional message
+                - language: language code
+        
+        Returns:
+            dict: Success status and referral ID
+        """
+        try:
+            db_data = {
+                'referrer_customer_id': referral_data['referrer_customer_id'],
+                'referrer_doctor_link': referral_data.get('referrer_doctor_link', ''),
+                'referred_name': referral_data['referred_name'],
+                'referred_email': referral_data['referred_email'],
+                'referred_specialty': referral_data.get('referred_specialty', ''),
+                'message': referral_data.get('message', ''),
+                'language': referral_data.get('language', 'en'),
+                'created_at': datetime.now().isoformat()
+            }
+            
+            result = self.supabase.table('referrals').insert(db_data).execute()
+            
+            referral_id = result.data[0]['id'] if result.data else None
+            
+            return {
+                'success': True,
+                'message': 'Referral saved',
+                'referral_id': referral_id
+            }
+        
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
