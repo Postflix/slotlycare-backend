@@ -113,6 +113,12 @@ class ReferralRequest(BaseModel):
     referrer_doctor_link: Optional[str] = ""
     language: Optional[str] = "en"
 
+class TrialSignupRequest(BaseModel):
+    email: str
+    password: str
+    name: str
+    slug: str
+
 # ==================== SCHEDULE FUNCTIONS ====================
 
 def validate_schedule_text(text: str) -> Optional[str]:
@@ -948,6 +954,82 @@ async def save_referral(request: ReferralRequest):
             "success": True,
             "message": "Referral saved successfully",
             "referral_id": result.get('referral_id')
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+# ==================== TRIAL ENDPOINTS ====================
+
+@app.post("/api/trial-signup")
+async def trial_signup(request: TrialSignupRequest):
+    """
+    Create a trial account (no payment required).
+    Generates a trial customer_id and creates user + doctor records.
+    """
+    try:
+        sheets = SheetsClient()
+        
+        # Validate email not already taken
+        existing_user = sheets.get_user_by_email(request.email)
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Validate slug not already taken
+        slug = request.slug.strip().lower()
+        if not sheets.check_link_available(slug):
+            raise HTTPException(status_code=400, detail="This link is already taken")
+        
+        # Generate trial customer_id
+        trial_id = f"trial_{secrets.token_hex(8)}"
+        
+        # Hash password
+        password_hash = hash_password(request.password)
+        
+        # Create user record
+        user_result = sheets.save_user({
+            'customer_id': trial_id,
+            'email': request.email,
+            'password_hash': password_hash,
+            'created_at': datetime.now().isoformat()
+        })
+        
+        if not user_result['success']:
+            raise HTTPException(status_code=500, detail="Failed to create user")
+        
+        # Create doctor record with minimal info
+        doctor_result = sheets.save_doctor({
+            'id': slug,
+            'name': request.name,
+            'specialty': '',
+            'address': '',
+            'phone': '',
+            'email': request.email,
+            'logo_url': '',
+            'color': '#3B82F6',
+            'language': 'en',
+            'welcome_message': '',
+            'additional_info': '',
+            'link': slug,
+            'customer_id': trial_id
+        })
+        
+        if not doctor_result['success']:
+            raise HTTPException(status_code=500, detail="Failed to create doctor profile")
+        
+        # Update invite status
+        sheets.update_invite_status(slug, 'trial_started')
+        
+        return {
+            "success": True,
+            "message": "Trial account created",
+            "customer_id": trial_id,
+            "email": request.email
         }
     
     except HTTPException:
