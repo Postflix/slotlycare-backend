@@ -591,6 +591,7 @@ class SheetsClient:
                 - referred_specialty: specialty (optional)
                 - message: optional message
                 - language: language code
+                - invite_slug: slug of the generated invite (optional)
         
         Returns:
             dict: Success status and referral ID
@@ -606,6 +607,10 @@ class SheetsClient:
                 'language': referral_data.get('language', 'en'),
                 'created_at': datetime.now().isoformat()
             }
+            
+            # Include invite_slug if provided
+            if referral_data.get('invite_slug'):
+                db_data['invite_slug'] = referral_data['invite_slug']
             
             result = self.supabase.table('referrals').insert(db_data).execute()
             
@@ -644,3 +649,96 @@ class SheetsClient:
         except Exception as e:
             print(f"Error updating invite status: {e}")
             return False
+    
+    def create_invite(self, invite_data):
+        """
+        Create a new invite record
+        
+        Args:
+            invite_data (dict):
+                - invited_name: Name of the invited colleague
+                - slug: Unique URL slug
+                - referrer_name: Name of doctor who referred (activates green bar)
+                - status: Default 'pending'
+        
+        Returns:
+            dict: Success status and slug
+        """
+        try:
+            result = self.supabase.table('invites').insert(invite_data).execute()
+            return {
+                'success': True,
+                'slug': invite_data.get('slug', '')
+            }
+        except Exception as e:
+            print(f"Error creating invite: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def check_slug_available(self, slug):
+        """
+        Check if a slug is available in BOTH invites and doctors tables
+        
+        Args:
+            slug (str): Slug to check
+        
+        Returns:
+            bool: True if available, False if taken
+        """
+        try:
+            # Check invites table
+            invite_result = self.supabase.table('invites').select('slug').eq('slug', slug).execute()
+            if invite_result.data and len(invite_result.data) > 0:
+                return False
+            
+            # Check doctors table (someone may already have this link)
+            doctor_result = self.supabase.table('doctors').select('link').eq('link', slug).execute()
+            if doctor_result.data and len(doctor_result.data) > 0:
+                return False
+            
+            return True
+        except Exception as e:
+            print(f"Error checking slug availability: {e}")
+            return False
+    
+    def get_referral_stats(self, referrer_name):
+        """
+        Get referral statistics for a doctor by their name.
+        Queries invites table where referrer_name matches.
+        
+        Args:
+            referrer_name (str): Name of the referring doctor
+        
+        Returns:
+            dict: Stats with total, pending, clicked, trial_started, converted counts
+        """
+        try:
+            result = self.supabase.table('invites').select('invited_name, slug, status, created_at').eq('referrer_name', referrer_name).execute()
+            
+            stats = {
+                'total': 0,
+                'pending': 0,
+                'clicked': 0,
+                'trial_started': 0,
+                'converted': 0,
+                'invites': []
+            }
+            
+            if result.data:
+                stats['total'] = len(result.data)
+                for row in result.data:
+                    status = row.get('status', 'pending')
+                    if status in stats:
+                        stats[status] += 1
+                    stats['invites'].append({
+                        'name': row.get('invited_name', ''),
+                        'slug': row.get('slug', ''),
+                        'status': status
+                    })
+            
+            return stats
+        except Exception as e:
+            print(f"Error getting referral stats: {e}")
+            return {'total': 0, 'pending': 0, 'clicked': 0, 'trial_started': 0, 'converted': 0, 'invites': []}
