@@ -155,7 +155,8 @@ class SheetsClient:
                     'welcome_message': row.get('welcome_message', ''),
                     'additional_info': row.get('additional_info', ''),
                     'link': row.get('link', ''),
-                    'customer_id': row.get('customer_id', '')
+                    'customer_id': row.get('customer_id', ''),
+                    'created_at': row.get('created_at', '')
                 }
             
             return None
