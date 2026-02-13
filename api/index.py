@@ -131,6 +131,10 @@ class BatchReferralRequest(BaseModel):
     referrer_doctor_link: Optional[str] = ""
     language: Optional[str] = "en"
 
+class UpgradeTrialRequest(BaseModel):
+    trial_customer_id: str
+    stripe_customer_id: str
+
 # ==================== SCHEDULE FUNCTIONS ====================
 
 def validate_schedule_text(text: str) -> Optional[str]:
@@ -1223,6 +1227,63 @@ async def trial_signup(request: TrialSignupRequest):
             "message": "Trial account created",
             "customer_id": trial_id,
             "email": request.email
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@app.post("/api/upgrade-trial")
+async def upgrade_trial(request: UpgradeTrialRequest):
+    """
+    Upgrade a trial account to paid.
+    Replaces trial_xxx customer_id with cus_xxx from Stripe
+    in both doctors and users tables. Preserves all profile data.
+    """
+    try:
+        # Validate: trial_customer_id must start with trial_
+        if not request.trial_customer_id.startswith('trial_'):
+            raise HTTPException(status_code=400, detail="Invalid trial customer ID")
+        
+        # Validate: stripe_customer_id must start with cus_
+        if not request.trial_customer_id or not request.stripe_customer_id:
+            raise HTTPException(status_code=400, detail="Both IDs are required")
+        
+        sheets = SheetsClient()
+        
+        # Verify trial account exists
+        doctor = sheets.get_doctor_by_customer_id(request.trial_customer_id)
+        if not doctor:
+            raise HTTPException(status_code=404, detail="Trial account not found")
+        
+        # Verify Stripe customer exists
+        try:
+            stripe.Customer.retrieve(request.stripe_customer_id)
+        except:
+            raise HTTPException(status_code=404, detail="Stripe customer not found")
+        
+        # Perform the upgrade
+        result = sheets.upgrade_trial_to_paid(
+            request.trial_customer_id,
+            request.stripe_customer_id
+        )
+        
+        if not result['success']:
+            raise HTTPException(status_code=500, detail=result.get('error', 'Upgrade failed'))
+        
+        # Update invite status to converted (if invite exists)
+        doctor_link = doctor.get('link', '')
+        if doctor_link:
+            sheets.update_invite_status(doctor_link, 'converted')
+        
+        return {
+            "success": True,
+            "message": "Trial upgraded to paid account",
+            "new_customer_id": request.stripe_customer_id
         }
     
     except HTTPException:
