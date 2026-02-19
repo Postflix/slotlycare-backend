@@ -138,18 +138,6 @@ class UpgradeTrialRequest(BaseModel):
     trial_customer_id: str
     stripe_customer_id: str
 
-class ColleagueItem(BaseModel):
-    name: Optional[str] = ""
-    contact: Optional[str] = ""
-
-class NewGradRequest(BaseModel):
-    customer_id: str
-    university: Optional[str] = ""
-    graduation_year: Optional[str] = ""
-    colleagues: Optional[List[ColleagueItem]] = []
-    communities: Optional[str] = ""
-    suggestions: Optional[str] = ""
-
 # ==================== SCHEDULE FUNCTIONS ====================
 
 def validate_schedule_text(text: str) -> Optional[str]:
@@ -1334,37 +1322,6 @@ async def upgrade_trial(request: UpgradeTrialRequest):
             status_code=500,
             detail=f"Internal server error: {str(e)}"
         )
-
-# ==================== NEW GRAD ENDPOINT ====================
-
-@app.post("/api/save-newgrad")
-async def save_newgrad(request: NewGradRequest):
-    """
-    Save new graduate program data (contrapartida).
-    Called after trial signup when source=newgrad.
-    """
-    try:
-        from supabase_client import SheetsClient
-        sheets = SheetsClient()
-
-        colleagues_json = json.dumps(
-            [c.dict() for c in request.colleagues] if request.colleagues else []
-        )
-
-        result = sheets.supabase.table('new_grad_data').insert({
-            'customer_id': request.customer_id,
-            'university': request.university or '',
-            'graduation_year': request.graduation_year or '',
-            'colleagues': colleagues_json,
-            'communities': request.communities or '',
-            'suggestions': request.suggestions or '',
-        }).execute()
-
-        return {"success": True, "message": "New grad data saved"}
-
-    except Exception as e:
-        print(f"Error saving new grad data: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # ==================== EXCEPTION HANDLERS ====================
 
