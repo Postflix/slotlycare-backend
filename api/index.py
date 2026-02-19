@@ -138,6 +138,18 @@ class UpgradeTrialRequest(BaseModel):
     trial_customer_id: str
     stripe_customer_id: str
 
+class NewGradColleague(BaseModel):
+    name: Optional[str] = ""
+    contact: Optional[str] = ""
+
+class NewGradRequest(BaseModel):
+    customer_id: Optional[str] = ""
+    university: str
+    graduation_year: str
+    colleagues: Optional[List[NewGradColleague]] = []
+    communities: Optional[str] = ""
+    suggestions: Optional[str] = ""
+
 # ==================== SCHEDULE FUNCTIONS ====================
 
 def validate_schedule_text(text: str) -> Optional[str]:
@@ -1315,6 +1327,47 @@ async def upgrade_trial(request: UpgradeTrialRequest):
             "new_customer_id": request.stripe_customer_id
         }
     
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@app.post("/api/save-newgrad")
+async def save_newgrad(request: NewGradRequest):
+    """
+    Save new graduate program data.
+    Stores university, graduation year, colleagues, communities and suggestions
+    in the new_grad_data table.
+    """
+    try:
+        sheets = SheetsClient()
+
+        colleagues_data = [
+            {'name': c.name, 'contact': c.contact}
+            for c in (request.colleagues or [])
+            if c.name or c.contact
+        ]
+
+        result = sheets.save_new_grad({
+            'customer_id': request.customer_id or '',
+            'university': request.university,
+            'graduation_year': request.graduation_year,
+            'colleagues': json.dumps(colleagues_data),
+            'communities': request.communities or '',
+            'suggestions': request.suggestions or ''
+        })
+
+        if not result['success']:
+            raise HTTPException(status_code=500, detail="Failed to save new grad data")
+
+        return {
+            "success": True,
+            "message": "New grad data saved"
+        }
+
     except HTTPException:
         raise
     except Exception as e:
