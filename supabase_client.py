@@ -784,3 +784,43 @@ class SheetsClient:
         except Exception as e:
             print(f"Error getting referral stats: {e}")
             return {'total': 0, 'pending': 0, 'clicked': 0, 'trial_started': 0, 'converted': 0, 'invites': []}
+
+    def save_new_grad(self, data):
+        """
+        Save new graduate program data to new_grad_data table.
+
+        Args:
+            data (dict):
+                - customer_id: trial customer ID (optional)
+                - university: medical school name
+                - graduation_year: year of graduation
+                - colleagues: JSON string with list of colleagues
+                - communities: communities text (optional)
+                - suggestions: suggestions text (optional)
+
+        Returns:
+            dict: Success status
+        """
+        try:
+            db_data = {
+                'customer_id': data.get('customer_id', ''),
+                'university': data['university'],
+                'graduation_year': data['graduation_year'],
+                'colleagues': data.get('colleagues', '[]'),
+                'communities': data.get('communities', ''),
+                'suggestions': data.get('suggestions', ''),
+                'created_at': datetime.now().isoformat()
+            }
+
+            self.supabase.table('new_grad_data').insert(db_data).execute()
+
+            return {
+                'success': True,
+                'message': 'New grad data saved'
+            }
+
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
