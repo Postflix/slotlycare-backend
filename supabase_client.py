@@ -824,3 +824,28 @@ class SheetsClient:
                 'success': False,
                 'error': str(e)
             }
+
+    def save_opinion(self, customer_id, opinion_text):
+        """
+        Save user feedback/opinion to the opinions table.
+
+        Args:
+            customer_id (str): Stripe customer ID of the user
+            opinion_text (str): The feedback text
+
+        Returns:
+            dict: Success status
+        """
+        try:
+            db_data = {
+                'customer_id': customer_id,
+                'opinion': opinion_text,
+                'created_at': datetime.now().isoformat()
+            }
+
+            self.supabase.table('opinions').insert(db_data).execute()
+
+            return {'success': True}
+
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
