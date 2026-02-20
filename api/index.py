@@ -92,6 +92,7 @@ class CreateCheckoutRequest(BaseModel):
     success_url: str
     cancel_url: str
     is_trial: Optional[bool] = False
+    trial_source: Optional[str] = None  # 'invite' = convite médico (30% off) | 'landing' = landing principal (sem desconto por ora)
     coupon_code: Optional[str] = None   # Ex: "CIOSP2026" — para landings de parceiros
     test_mode: Optional[bool] = False   # True = usa price de teste (R$1 / price_1Sri6Y...)
 
@@ -851,9 +852,14 @@ async def create_checkout_session(request: CreateCheckoutRequest):
         # Determina desconto a aplicar
         # Prioridade: is_trial > coupon_code > allow_promotion_codes
         # Nota: Stripe não permite allow_promotion_codes + discounts ao mesmo tempo
-        if request.is_trial:
-            # Trial: desconto automático 30% (Referral30)
+        if request.is_trial and request.trial_source != 'landing':
+            # Trial via convite (invite.html): desconto automático 30% (Referral30)
             checkout_params['discounts'] = [{'promotion_code': 'promo_1T0Ov8DMcPDY3XCzs2doSm4F'}]
+        elif request.is_trial and request.trial_source == 'landing':
+            # Trial via landing principal: sem desconto por ora — preço cheio $948
+            # TODO: para ativar desconto no futuro, descomente a linha abaixo e comente o allow_promotion_codes
+            # checkout_params['discounts'] = [{'promotion_code': 'promo_1T0Ov8DMcPDY3XCzs2doSm4F'}]
+            checkout_params['allow_promotion_codes'] = True
         elif request.coupon_code:
             # Parceiro: busca o promotion_code pelo código legível (ex: "CIOSP2026")
             promo_list = stripe.PromotionCode.list(code=request.coupon_code, limit=1, active=True)
