@@ -1133,7 +1133,8 @@ async def batch_referrals(request: BatchReferralRequest):
                     'invited_name': item.name,
                     'slug': unique_slug,
                     'referrer_name': referrer_name,
-                    'status': 'pending'
+                    'status': 'pending',
+                    'contact_info': item.email
                 })
                 
                 if not invite_result['success']:
