@@ -893,10 +893,26 @@ async def get_checkout_session(session_id: str):
     try:
         session = stripe.checkout.Session.retrieve(session_id)
         
+        customer_id = session.customer
+        customer_email = session.customer_details.email if session.customer_details else None
+
+        # Payment Link flow: payment succeeded but no customer created
+        # Create a Stripe Customer so success.html can proceed normally
+        if not customer_id and session.payment_status == "paid" and customer_email:
+            try:
+                new_customer = stripe.Customer.create(
+                    email=customer_email,
+                    metadata={"source": "payment_link", "session_id": session_id}
+                )
+                customer_id = new_customer.id
+                print(f"Created customer {customer_id} for Payment Link session {session_id}")
+            except Exception as ce:
+                print(f"Failed to create customer for session {session_id}: {str(ce)}")
+
         return {
             "success": True,
-            "customer_id": session.customer,
-            "customer_email": session.customer_details.email if session.customer_details else None,
+            "customer_id": customer_id,
+            "customer_email": customer_email,
             "payment_status": session.payment_status,
             "payment_intent": session.payment_intent
         }
