@@ -127,6 +127,7 @@ class TrialSignupRequest(BaseModel):
 class BatchReferralItem(BaseModel):
     name: str
     email: str
+    type: Optional[str] = "colleague"
 
 class BatchReferralRequest(BaseModel):
     referrals: List[BatchReferralItem]
@@ -1150,7 +1151,8 @@ async def batch_referrals(request: BatchReferralRequest):
                     'slug': unique_slug,
                     'referrer_name': referrer_name,
                     'status': 'pending',
-                    'contact_info': item.email
+                    'contact_info': item.email,
+                    'type': item.type
                 })
                 
                 if not invite_result['success']:
