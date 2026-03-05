@@ -1447,6 +1447,61 @@ async def save_opinion(request: OpinionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ==================== DM CARD GENERATOR INVITES ====================
+
+class DmInviteItem(BaseModel):
+    name: str
+    specialty: Optional[str] = ""
+    slug: str  # pre-verified slug from dm-card-generator
+
+class DmInvitesRequest(BaseModel):
+    invites: List[DmInviteItem]
+    language: Optional[str] = "pt"
+
+@app.post("/api/dm-invites")
+async def dm_invites(request: DmInvitesRequest):
+    """
+    Create invite records for slugs pre-verified by the DM card generator.
+    referrer_name is always 'SlotlyCare' (direct prospecting, not doctor referral).
+    Slugs are accepted as-is — no generation, no modification.
+    """
+    try:
+        sheets = SheetsClient()
+        results = []
+        errors = []
+
+        for item in request.invites:
+            try:
+                invite_result = sheets.create_invite({
+                    'invited_name': item.name,
+                    'slug': item.slug,
+                    'referrer_name': 'SlotlyCare',
+                    'status': 'pending',
+                    'contact_info': '',
+                    'type': 'colleague'
+                })
+
+                if not invite_result['success']:
+                    errors.append({'name': item.name, 'slug': item.slug, 'error': invite_result.get('error', 'Failed to create invite')})
+                    continue
+
+                results.append({'name': item.name, 'slug': item.slug})
+
+            except Exception as item_error:
+                errors.append({'name': item.name, 'slug': item.slug, 'error': str(item_error)})
+
+        return {
+            "success": True,
+            "created": len(results),
+            "errors": len(errors),
+            "invites": results,
+            "error_details": errors if errors else []
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
 # ==================== VERCEL HANDLER ====================
 
 # For Vercel, the app instance is automatically used as the handler
