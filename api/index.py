@@ -69,6 +69,7 @@ class DoctorModel(BaseModel):
     link: str
     slots: Optional[List[SlotModel]] = []
     customer_id: Optional[str] = ""  # Stripe customer ID
+    partner_source: Optional[str] = None  # Coupon code if came from partner channel
 
 class AppointmentModel(BaseModel):
     doctor_id: str
@@ -680,7 +681,8 @@ async def save_doctor(doctor: DoctorModel):
             'welcome_message': doctor.welcome_message or '',
             'additional_info': doctor.additional_info or '',
             'link': doctor.link,
-            'customer_id': doctor.customer_id or ''
+            'customer_id': doctor.customer_id or '',
+            'partner_source': doctor.partner_source
         }
         
         # Save doctor data
@@ -870,6 +872,10 @@ async def create_checkout_session(request: CreateCheckoutRequest):
             # Compra normal: usuário pode digitar cupom manualmente
             checkout_params['allow_promotion_codes'] = True
         
+        # Add partner tracking metadata if coupon was used
+        if request.coupon_code:
+            checkout_params['metadata'] = {'partner_coupon': request.coupon_code}
+        
         checkout_session = stripe.checkout.Session.create(**checkout_params)
         
         return {
@@ -915,7 +921,8 @@ async def get_checkout_session(session_id: str):
             "customer_id": customer_id,
             "customer_email": customer_email,
             "payment_status": session.payment_status,
-            "payment_intent": session.payment_intent
+            "payment_intent": session.payment_intent,
+            "partner_source": session.metadata.get('partner_coupon') if session.metadata else None
         }
     
     except Exception as e:
@@ -1224,6 +1231,41 @@ async def referral_stats(customer_id: str):
             status_code=500,
             detail=f"Internal server error: {str(e)}"
         )
+
+@app.get("/api/invite-partner-check/{slug}")
+async def invite_partner_check(slug: str):
+    """
+    Check if the referrer of an invite came from a partner channel.
+    Used by invite.html to decide whether to offer partner pricing to the invitee.
+    Returns partner_source (coupon code) if referrer came from a partner, null otherwise.
+    """
+    try:
+        sheets = SheetsClient()
+        
+        # 1. Find the referral record by invite_slug to get referrer_customer_id
+        result = sheets.supabase.table('referrals').select('referrer_customer_id').eq('invite_slug', slug).execute()
+        
+        if not result.data or len(result.data) == 0:
+            return {"success": True, "partner_source": None}
+        
+        referrer_customer_id = result.data[0].get('referrer_customer_id')
+        if not referrer_customer_id:
+            return {"success": True, "partner_source": None}
+        
+        # 2. Look up the referrer's doctor record for partner_source
+        doctor = sheets.get_doctor_by_customer_id(referrer_customer_id)
+        if not doctor:
+            return {"success": True, "partner_source": None}
+        
+        partner_source = doctor.get('partner_source')
+        
+        return {
+            "success": True,
+            "partner_source": partner_source
+        }
+    
+    except Exception as e:
+        return {"success": True, "partner_source": None}
 
 # ==================== TRIAL ENDPOINTS ====================
 
