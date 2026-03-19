@@ -60,6 +60,7 @@ class SheetsClient:
                 'additional_info': doctor_data.get('additional_info', ''),
                 'link': doctor_data['link'],
                 'customer_id': doctor_data.get('customer_id', existing.get('customer_id', '') if existing else ''),
+                'partner_source': doctor_data.get('partner_source', existing.get('partner_source') if existing else None),
                 'updated_at': datetime.now().isoformat()
             }
             
