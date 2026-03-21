@@ -855,3 +855,45 @@ class SheetsClient:
 
         except Exception as e:
             return {'success': False, 'error': str(e)}
+
+    # ==================== PENDING ACCOUNTS (WEBHOOK SAFETY NET) ====================
+
+    def save_pending_account(self, data):
+        """
+        Save a pending account from Stripe webhook.
+        This is a safety net: if success.html fails, the payment
+        is still recorded and can be recovered.
+
+        Args:
+            data (dict):
+                - session_id: Stripe checkout session ID
+                - customer_id: Stripe customer ID
+                - customer_email: customer email
+                - partner_source: coupon code if from partner
+                - plan_years: subscription duration
+                - payment_status: payment status from Stripe
+                - amount_total: total amount in cents
+
+        Returns:
+            dict: Success status
+        """
+        try:
+            db_data = {
+                'session_id': data['session_id'],
+                'customer_id': data.get('customer_id', ''),
+                'customer_email': data.get('customer_email', ''),
+                'partner_source': data.get('partner_source'),
+                'plan_years': data.get('plan_years', 3),
+                'payment_status': data.get('payment_status', ''),
+                'amount_total': data.get('amount_total')
+            }
+
+            self.supabase.table('pending_accounts').upsert(
+                db_data, on_conflict='session_id'
+            ).execute()
+
+            return {'success': True}
+
+        except Exception as e:
+            print(f"Error saving pending account: {e}")
+            return {'success': False, 'error': str(e)}
