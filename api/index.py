@@ -70,6 +70,7 @@ class DoctorModel(BaseModel):
     slots: Optional[List[SlotModel]] = []
     customer_id: Optional[str] = ""  # Stripe customer ID
     partner_source: Optional[str] = None  # Coupon code if came from partner channel
+    plan_years: Optional[int] = None  # Subscription duration (default 3, referral gets 5)
 
 class AppointmentModel(BaseModel):
     doctor_id: str
@@ -94,6 +95,7 @@ class CreateCheckoutRequest(BaseModel):
     cancel_url: str
     is_trial: Optional[bool] = False
     coupon_code: Optional[str] = None   # Ex: "CIOSP2026" — para landings de parceiros
+    plan_years: Optional[int] = None   # Subscription duration to store in metadata
     test_mode: Optional[bool] = False   # True = usa price de teste (R$1 / price_1Sri6Y...)
 
 class SetPasswordRequest(BaseModel):
@@ -682,7 +684,8 @@ async def save_doctor(doctor: DoctorModel):
             'additional_info': doctor.additional_info or '',
             'link': doctor.link,
             'customer_id': doctor.customer_id or '',
-            'partner_source': doctor.partner_source
+            'partner_source': doctor.partner_source,
+            'plan_years': doctor.plan_years
         }
         
         # Save doctor data
@@ -876,6 +879,10 @@ async def create_checkout_session(request: CreateCheckoutRequest):
         if request.coupon_code:
             checkout_params['metadata'] = {'partner_coupon': request.coupon_code}
         
+        # Add plan_years to metadata if provided
+        if request.plan_years:
+            checkout_params.setdefault('metadata', {})['plan_years'] = str(request.plan_years)
+        
         checkout_session = stripe.checkout.Session.create(**checkout_params)
         
         return {
@@ -922,7 +929,8 @@ async def get_checkout_session(session_id: str):
             "customer_email": customer_email,
             "payment_status": session.payment_status,
             "payment_intent": session.payment_intent,
-            "partner_source": session.metadata.get('partner_coupon') if session.metadata else None
+            "partner_source": session.metadata.get('partner_coupon') if session.metadata else None,
+            "plan_years": int(session.metadata.get('plan_years', 3)) if session.metadata else 3
         }
     
     except Exception as e:
@@ -1258,14 +1266,16 @@ async def invite_partner_check(slug: str):
             return {"success": True, "partner_source": None}
         
         partner_source = doctor.get('partner_source')
+        plan_years = doctor.get('plan_years', 3)
         
         return {
             "success": True,
-            "partner_source": partner_source
+            "partner_source": partner_source,
+            "plan_years": plan_years
         }
     
     except Exception as e:
-        return {"success": True, "partner_source": None}
+        return {"success": True, "partner_source": None, "plan_years": 3}
 
 # ==================== TRIAL ENDPOINTS ====================
 
