@@ -61,6 +61,7 @@ class SheetsClient:
                 'link': doctor_data['link'],
                 'customer_id': doctor_data.get('customer_id', existing.get('customer_id', '') if existing else ''),
                 'partner_source': doctor_data.get('partner_source', existing.get('partner_source') if existing else None),
+                'plan_years': doctor_data.get('plan_years', existing.get('plan_years', 3) if existing else 3),
                 'updated_at': datetime.now().isoformat()
             }
             
@@ -119,7 +120,9 @@ class SheetsClient:
                     'additional_info': row.get('additional_info', ''),
                     'link': row.get('link', ''),
                     'customer_id': row.get('customer_id', ''),
-                    'created_at': row.get('created_at', '')
+                    'created_at': row.get('created_at', ''),
+                    'partner_source': row.get('partner_source'),
+                    'plan_years': row.get('plan_years', 3)
                 }
             
             return None
@@ -157,7 +160,9 @@ class SheetsClient:
                     'additional_info': row.get('additional_info', ''),
                     'link': row.get('link', ''),
                     'customer_id': row.get('customer_id', ''),
-                    'created_at': row.get('created_at', '')
+                    'created_at': row.get('created_at', ''),
+                    'partner_source': row.get('partner_source'),
+                    'plan_years': row.get('plan_years', 3)
                 }
             
             return None
