@@ -939,6 +939,68 @@ async def get_checkout_session(session_id: str):
             detail=f"Failed to retrieve session: {str(e)}"
         )
 
+@app.post("/api/stripe-webhook")
+async def stripe_webhook(request: Request):
+    """
+    Stripe Webhook — safety net for payment confirmation.
+    Listens for checkout.session.completed events and saves
+    the account to pending_accounts so it can be recovered
+    even if success.html fails.
+    """
+    payload = await request.body()
+    sig_header = request.headers.get('stripe-signature')
+    webhook_secret = os.environ.get('STRIPE_WEBHOOK_SECRET')
+
+    if not webhook_secret:
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Invalid signature")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Webhook error: {str(e)}")
+
+    if event['type'] == 'checkout.session.completed':
+        session = event['data']['object']
+
+        customer_id = session.get('customer')
+        customer_email = None
+        if session.get('customer_details'):
+            customer_email = session['customer_details'].get('email')
+
+        metadata = session.get('metadata', {}) or {}
+        partner_source = metadata.get('partner_coupon')
+        plan_years = int(metadata.get('plan_years', 3))
+        amount_total = session.get('amount_total')
+
+        # If no customer was created (Payment Link flow), create one
+        if not customer_id and session.get('payment_status') == 'paid' and customer_email:
+            try:
+                new_customer = stripe.Customer.create(
+                    email=customer_email,
+                    metadata={"source": "webhook", "session_id": session.get('id', '')}
+                )
+                customer_id = new_customer.id
+            except Exception:
+                pass
+
+        try:
+            sheets = SheetsClient()
+            sheets.save_pending_account({
+                'session_id': session.get('id', ''),
+                'customer_id': customer_id or '',
+                'customer_email': customer_email or '',
+                'partner_source': partner_source,
+                'plan_years': plan_years,
+                'payment_status': session.get('payment_status', ''),
+                'amount_total': amount_total
+            })
+        except Exception as e:
+            print(f"Webhook: failed to save pending account: {e}")
+
+    return JSONResponse(content={"received": True}, status_code=200)
+
 @app.post("/api/set-password")
 async def set_password(request: SetPasswordRequest):
     """
