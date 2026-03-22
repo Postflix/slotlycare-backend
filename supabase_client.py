@@ -897,3 +897,35 @@ class SheetsClient:
         except Exception as e:
             print(f"Error saving pending account: {e}")
             return {'success': False, 'error': str(e)}
+
+    def get_pending_account_by_email(self, email):
+        """
+        Look up a pending account by email.
+        Used for account recovery when success.html fails.
+
+        Args:
+            email (str): Customer email
+
+        Returns:
+            dict: Pending account data or None if not found
+        """
+        try:
+            result = self.supabase.table('pending_accounts').select('*').eq('customer_email', email).eq('payment_status', 'paid').order('created_at', desc=True).limit(1).execute()
+
+            if result.data and len(result.data) > 0:
+                row = result.data[0]
+                return {
+                    'session_id': row.get('session_id', ''),
+                    'customer_id': row.get('customer_id', ''),
+                    'customer_email': row.get('customer_email', ''),
+                    'partner_source': row.get('partner_source'),
+                    'plan_years': row.get('plan_years', 3),
+                    'payment_status': row.get('payment_status', ''),
+                    'amount_total': row.get('amount_total')
+                }
+
+            return None
+
+        except Exception as e:
+            print(f"Error getting pending account: {e}")
+            return None
