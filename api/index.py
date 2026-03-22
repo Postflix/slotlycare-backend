@@ -1001,6 +1001,64 @@ async def stripe_webhook(request: Request):
 
     return JSONResponse(content={"received": True}, status_code=200)
 
+class RecoverAccountRequest(BaseModel):
+    email: str
+    password: str
+
+@app.post("/api/recover-account")
+async def recover_account(request: RecoverAccountRequest):
+    """
+    Recover an account when success.html failed after payment.
+    Looks up the email in pending_accounts, verifies payment,
+    creates user + doctor records if they don't exist.
+    """
+    try:
+        sheets = SheetsClient()
+
+        # 1. Check if user already exists (already recovered or normal flow worked)
+        existing_user = sheets.get_user_by_email(request.email)
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Account already exists. Try logging in instead.")
+
+        # 2. Look up in pending_accounts
+        pending = sheets.get_pending_account_by_email(request.email)
+        if not pending:
+            raise HTTPException(status_code=404, detail="No payment found for this email. Please check the email address or contact support.")
+
+        customer_id = pending.get('customer_id')
+        if not customer_id:
+            raise HTTPException(status_code=400, detail="Payment record incomplete. Please contact support.")
+
+        # 3. Create user record
+        password_hash = hash_password(request.password)
+        user_result = sheets.save_user({
+            'customer_id': customer_id,
+            'email': request.email,
+            'password_hash': password_hash,
+            'created_at': datetime.now().isoformat()
+        })
+
+        if not user_result['success']:
+            raise HTTPException(status_code=500, detail="Failed to create user account")
+
+        # 4. Save partner_source and plan_years to localStorage via response
+        partner_source = pending.get('partner_source')
+        plan_years = pending.get('plan_years', 3)
+
+        return {
+            "success": True,
+            "message": "Account recovered successfully",
+            "customer_id": customer_id,
+            "email": request.email,
+            "partner_source": partner_source,
+            "plan_years": plan_years
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 @app.post("/api/set-password")
 async def set_password(request: SetPasswordRequest):
     """
