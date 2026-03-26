@@ -804,6 +804,40 @@ async def book_appointment(appointment: AppointmentModel):
                 detail=result.get('error', 'Failed to create appointment')
             )
         
+        # === NOTIFICATION SYSTEM ===
+        # Send bell notification for every new appointment
+        try:
+            # Get doctor info to find customer_id
+            doctor = sheets.get_doctor(appointment.doctor_id)
+            if doctor and doctor.get('customer_id'):
+                customer_id = doctor['customer_id']
+                
+                # Appointment notification
+                notif_text = f"📅 New appointment: {appointment.patient_name} — {appointment.date} at {appointment.time}"
+                sheets.create_message(customer_id, notif_text, 'appointment')
+                
+                # Count total appointments to check milestones
+                total_appointments = sheets.count_doctor_appointments(appointment.doctor_id)
+                
+                # First appointment → unlock referrals
+                if total_appointments == 1 and not doctor.get('referral_unlocked'):
+                    sheets.unlock_doctor_referral(appointment.doctor_id)
+                    unlock_text = "🎁 You've unlocked referrals! Your first patient just booked — now you know it works. Tap to invite colleagues."
+                    sheets.create_message(customer_id, unlock_text, 'referral_unlock')
+                
+                # 10th appointment → milestone reminder
+                elif total_appointments == 10:
+                    milestone_text = "🎉 10 patients have booked through your link. Your colleagues are still doing this by phone — you have invites waiting."
+                    sheets.create_message(customer_id, milestone_text, 'referral_milestone')
+                
+                # 25th appointment → final reminder
+                elif total_appointments == 25:
+                    milestone_text = "🚀 25 patients booked! You still have invites for colleagues who need this."
+                    sheets.create_message(customer_id, milestone_text, 'referral_milestone')
+        except Exception as notif_error:
+            # Notification failure should never block the appointment
+            print(f"Notification error (non-blocking): {notif_error}")
+        
         return {
             "success": True,
             "message": "Appointment booked successfully",
