@@ -122,7 +122,8 @@ class SheetsClient:
                     'customer_id': row.get('customer_id', ''),
                     'created_at': row.get('created_at', ''),
                     'partner_source': row.get('partner_source'),
-                    'plan_years': row.get('plan_years', 3)
+                    'plan_years': row.get('plan_years', 3),
+                    'referral_unlocked': row.get('referral_unlocked', False)
                 }
             
             return None
@@ -162,7 +163,8 @@ class SheetsClient:
                     'customer_id': row.get('customer_id', ''),
                     'created_at': row.get('created_at', ''),
                     'partner_source': row.get('partner_source'),
-                    'plan_years': row.get('plan_years', 3)
+                    'plan_years': row.get('plan_years', 3),
+                    'referral_unlocked': row.get('referral_unlocked', False)
                 }
             
             return None
@@ -854,6 +856,78 @@ class SheetsClient:
             return {'success': True}
 
         except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    # ==================== NOTIFICATION / MESSAGES METHODS ====================
+
+    def create_message(self, customer_id, text, msg_type='system'):
+        """
+        Insert a notification message into the messages table.
+        Used for appointment notifications and referral unlock triggers.
+
+        Args:
+            customer_id (str): Target customer ID (or 'all' for global)
+            text (str): Message text
+            msg_type (str): Message type ('manual', 'system', 'appointment', 'referral_unlock', 'referral_milestone')
+
+        Returns:
+            dict: Success status
+        """
+        try:
+            db_data = {
+                'customer_id': customer_id,
+                'text': text,
+                'type': msg_type,
+                'created_at': datetime.now().isoformat()
+            }
+
+            self.supabase.table('messages').insert(db_data).execute()
+
+            return {'success': True}
+
+        except Exception as e:
+            print(f"Error creating message: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def count_doctor_appointments(self, doctor_id):
+        """
+        Count total appointments for a doctor.
+        Used to determine referral unlock triggers (1st, 10th, 25th).
+
+        Args:
+            doctor_id (str): Doctor unique identifier
+
+        Returns:
+            int: Number of appointments
+        """
+        try:
+            result = self.supabase.table('appointments').select('id', count='exact').eq('doctor_id', doctor_id).execute()
+            return result.count if result.count is not None else len(result.data)
+        except Exception as e:
+            print(f"Error counting appointments: {e}")
+            return 0
+
+    def unlock_doctor_referral(self, doctor_id):
+        """
+        Set referral_unlocked = True for a doctor.
+        Called when first appointment is booked.
+
+        Args:
+            doctor_id (str): Doctor unique identifier
+
+        Returns:
+            dict: Success status
+        """
+        try:
+            self.supabase.table('doctors').update({
+                'referral_unlocked': True,
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', doctor_id).execute()
+
+            return {'success': True}
+
+        except Exception as e:
+            print(f"Error unlocking referral: {e}")
             return {'success': False, 'error': str(e)}
 
     # ==================== PENDING ACCOUNTS (WEBHOOK SAFETY NET) ====================
