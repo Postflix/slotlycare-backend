@@ -822,7 +822,7 @@ async def book_appointment(appointment: AppointmentModel):
                 # First appointment → unlock referrals
                 if total_appointments == 1 and not doctor.get('referral_unlocked'):
                     sheets.unlock_doctor_referral(appointment.doctor_id)
-                    unlock_text = "🎁 You've unlocked referrals! Your first patient just booked — now you know it works. Tap to invite colleagues."
+                    unlock_text = "🎉 Your first patient just booked! Now you know it works — invite colleagues who still do this the hard way."
                     sheets.create_message(customer_id, unlock_text, 'referral_unlock')
                 
                 # 10th appointment → milestone reminder
