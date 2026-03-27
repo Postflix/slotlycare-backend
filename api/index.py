@@ -50,6 +50,14 @@ NOTIF_MESSAGES = {
         'fr': "Vous venez de recevoir votre premier rendez-vous ! 🎊 Votre page de réservation fonctionne. Consultez votre Dashboard pour voir les détails. Ce n'est que le début.",
         'de': "Sie haben gerade Ihren ersten Termin erhalten! 🎊 Ihre Buchungsseite funktioniert. Überprüfen Sie Ihr Dashboard für die Details. Das ist erst der Anfang.",
         'it': "Hai appena ricevuto il tuo primo appuntamento! 🎊 La tua pagina di prenotazione funziona. Controlla il tuo Dashboard per vedere i dettagli. Questo è solo l'inizio."
+    },
+    'referral_converted': {
+        'en': "Great news — {name} just joined SlotlyCare through your invitation.",
+        'pt': "Ótima notícia — {name} acabou de assinar o SlotlyCare através do seu convite.",
+        'es': "Gran noticia — {name} acaba de unirse a SlotlyCare a través de tu invitación.",
+        'fr': "Bonne nouvelle — {name} vient de rejoindre SlotlyCare grâce à votre invitation.",
+        'de': "Tolle Neuigkeit — {name} ist gerade über Ihre Einladung SlotlyCare beigetreten.",
+        'it': "Ottima notizia — {name} si è appena unito a SlotlyCare grazie al tuo invito."
     }
 }
 
@@ -1596,6 +1604,24 @@ async def upgrade_trial(request: UpgradeTrialRequest):
         doctor_link = doctor.get('link', '')
         if doctor_link:
             sheets.update_invite_status(doctor_link, 'converted')
+        
+        # Notify referrer that their invite converted
+        try:
+            # Find who referred this doctor (by invite_slug matching doctor's link)
+            referral_result = sheets.supabase.table('referrals').select('referrer_customer_id').eq('invite_slug', doctor_link).execute()
+            if referral_result.data and len(referral_result.data) > 0:
+                referrer_customer_id = referral_result.data[0].get('referrer_customer_id')
+                if referrer_customer_id:
+                    # Get referrer's language
+                    referrer = sheets.get_doctor_by_customer_id(referrer_customer_id)
+                    referrer_lang = referrer.get('language', 'en') if referrer else 'en'
+                    # Get converted doctor's name
+                    converted_name = doctor.get('name', 'A colleague')
+                    # Send notification
+                    text = get_notif_text('referral_converted', referrer_lang).replace('{name}', converted_name)
+                    sheets.create_message(referrer_customer_id, text, 'referral_converted')
+        except Exception as notif_error:
+            print(f"Could not send referral conversion notification: {notif_error}")
         
         return {
             "success": True,
