@@ -25,6 +25,39 @@ import stripe
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from supabase_client import SheetsClient
 
+# ==================== NOTIFICATION MESSAGES (6 LANGUAGES) ====================
+NOTIF_MESSAGES = {
+    'welcome': {
+        'en': "Welcome to SlotlyCare! 🎉 You're now part of our founding community. We built this platform to give independent professionals like you full control over their schedule — and we're glad you're here. If you ever need anything, write directly to founders@slotlycare.com. This is a real inbox, and we reply personally.",
+        'pt': "Bem-vindo ao SlotlyCare! 🎉 Você agora faz parte da nossa comunidade fundadora. Criamos esta plataforma para dar a profissionais independentes como você total controle sobre sua agenda — e estamos felizes por ter você aqui. Se precisar de qualquer coisa, escreva diretamente para founders@slotlycare.com. É uma caixa real, e respondemos pessoalmente.",
+        'es': "¡Bienvenido a SlotlyCare! 🎉 Ahora eres parte de nuestra comunidad fundadora. Creamos esta plataforma para dar a profesionales independientes como tú el control total de su agenda — y nos alegra tenerte aquí. Si necesitas algo, escríbenos directamente a founders@slotlycare.com. Es una bandeja real, y respondemos personalmente.",
+        'fr': "Bienvenue sur SlotlyCare ! 🎉 Vous faites désormais partie de notre communauté fondatrice. Nous avons créé cette plateforme pour donner aux professionnels indépendants comme vous le contrôle total de leur agenda — et nous sommes ravis de vous accueillir. Si vous avez besoin de quoi que ce soit, écrivez directement à founders@slotlycare.com. C'est une vraie boîte, et nous répondons personnellement.",
+        'de': "Willkommen bei SlotlyCare! 🎉 Sie sind jetzt Teil unserer Gründer-Community. Wir haben diese Plattform entwickelt, um unabhängigen Fachleuten wie Ihnen die volle Kontrolle über ihren Terminplan zu geben — und wir freuen uns, Sie dabei zu haben. Wenn Sie etwas brauchen, schreiben Sie direkt an founders@slotlycare.com. Das ist ein echtes Postfach, und wir antworten persönlich.",
+        'it': "Benvenuto su SlotlyCare! 🎉 Ora fai parte della nostra comunità fondatrice. Abbiamo creato questa piattaforma per dare ai professionisti indipendenti come te il pieno controllo della propria agenda — e siamo felici di averti qui. Se hai bisogno di qualsiasi cosa, scrivi direttamente a founders@slotlycare.com. È una casella reale, e rispondiamo personalmente."
+    },
+    'first_schedule': {
+        'en': "Your AI-generated schedule is now live! 🤖 Patients can start booking with you right away. Share your personal link on your website, Instagram bio, WhatsApp, or business cards — the more visible it is, the more appointments you'll receive.",
+        'pt': "Sua agenda gerada por IA está no ar! 🤖 Pacientes já podem agendar com você. Compartilhe seu link pessoal no seu site, bio do Instagram, WhatsApp ou cartões de visita — quanto mais visível, mais agendamentos você receberá.",
+        'es': "¡Tu agenda generada por IA ya está activa! 🤖 Los pacientes ya pueden reservar contigo. Comparte tu enlace personal en tu sitio web, bio de Instagram, WhatsApp o tarjetas de visita — cuanto más visible sea, más citas recibirás.",
+        'fr': "Votre agenda générée par IA est en ligne ! 🤖 Les patients peuvent désormais prendre rendez-vous avec vous. Partagez votre lien personnel sur votre site web, bio Instagram, WhatsApp ou cartes de visite — plus il est visible, plus vous recevrez de rendez-vous.",
+        'de': "Ihr KI-generierter Terminplan ist jetzt aktiv! 🤖 Patienten können ab sofort bei Ihnen buchen. Teilen Sie Ihren persönlichen Link auf Ihrer Website, Instagram-Bio, WhatsApp oder Visitenkarten — je sichtbarer er ist, desto mehr Termine erhalten Sie.",
+        'it': "La tua agenda generata dall'IA è ora attiva! 🤖 I pazienti possono iniziare a prenotare con te subito. Condividi il tuo link personale sul tuo sito web, bio di Instagram, WhatsApp o biglietti da visita — più è visibile, più appuntamenti riceverai."
+    },
+    'first_appointment': {
+        'en': "You just received your first appointment! 🎊 Your booking page is working. Check your Dashboard to see the details. This is just the beginning.",
+        'pt': "Você acabou de receber seu primeiro agendamento! 🎊 Sua página de agendamento está funcionando. Acesse seu Dashboard para ver os detalhes. Isso é só o começo.",
+        'es': "¡Acabas de recibir tu primera cita! 🎊 Tu página de reservas está funcionando. Revisa tu Dashboard para ver los detalles. Esto es solo el comienzo.",
+        'fr': "Vous venez de recevoir votre premier rendez-vous ! 🎊 Votre page de réservation fonctionne. Consultez votre Dashboard pour voir les détails. Ce n'est que le début.",
+        'de': "Sie haben gerade Ihren ersten Termin erhalten! 🎊 Ihre Buchungsseite funktioniert. Überprüfen Sie Ihr Dashboard für die Details. Das ist erst der Anfang.",
+        'it': "Hai appena ricevuto il tuo primo appuntamento! 🎊 La tua pagina di prenotazione funziona. Controlla il tuo Dashboard per vedere i dettagli. Questo è solo l'inizio."
+    }
+}
+
+def get_notif_text(msg_key, language='en'):
+    """Get notification text in the doctor's language, fallback to English."""
+    msgs = NOTIF_MESSAGES.get(msg_key, {})
+    return msgs.get(language, msgs.get('en', ''))
+
 # Initialize FastAPI app
 app = FastAPI(
     title="SlotlyCare API",
@@ -699,7 +732,16 @@ async def save_doctor(doctor: DoctorModel):
         
         # Save availability slots if provided
         slots_saved = 0
+        is_first_schedule = False
         if doctor.slots:
+            # Check if this is the first time generating slots
+            try:
+                existing_slots = sheets.get_availability(doctor_data['id'])
+                if not existing_slots or len(existing_slots) == 0:
+                    is_first_schedule = True
+            except Exception:
+                pass
+            
             slots_data = [slot.dict() for slot in doctor.slots]
             # Use the doctor's ID (which may be the old ID if updating)
             save_id = doctor_data['id']
@@ -712,6 +754,15 @@ async def save_doctor(doctor: DoctorModel):
                 )
             
             slots_saved = slots_result.get('slots_count', 0)
+            
+            # First schedule notification
+            if is_first_schedule and slots_saved > 0 and doctor.customer_id:
+                try:
+                    lang = doctor.language or 'en'
+                    text = get_notif_text('first_schedule', lang)
+                    sheets.create_message(doctor.customer_id, text, 'system')
+                except Exception:
+                    pass
         
         return {
             "success": True,
@@ -804,37 +855,17 @@ async def book_appointment(appointment: AppointmentModel):
                 detail=result.get('error', 'Failed to create appointment')
             )
         
-        # === NOTIFICATION SYSTEM ===
-        # Send bell notification for every new appointment
+        # === FIRST APPOINTMENT NOTIFICATION ===
         try:
-            # Get doctor info to find customer_id
             doctor = sheets.get_doctor(appointment.doctor_id)
             if doctor and doctor.get('customer_id'):
-                customer_id = doctor['customer_id']
-                
-                # Appointment notification
-                notif_text = f"📅 New appointment: {appointment.patient_name} — {appointment.date} at {appointment.time}"
-                sheets.create_message(customer_id, notif_text, 'appointment')
-                
-                # Count total appointments to check milestones
-                total_appointments = sheets.count_doctor_appointments(appointment.doctor_id)
-                
-                # First appointment → unlock referrals
-                if total_appointments == 1 and not doctor.get('referral_unlocked'):
-                    sheets.unlock_doctor_referral(appointment.doctor_id)
-                    unlock_text = "🎉 Your first patient just booked! Now you know it works — invite colleagues who still do this the hard way."
-                    sheets.create_message(customer_id, unlock_text, 'referral_unlock')
-                
-                # 10th appointment → milestone reminder
-                elif total_appointments == 10:
-                    milestone_text = "🎉 10 patients have booked through your link. Your colleagues are still doing this by phone — you have invites waiting."
-                    sheets.create_message(customer_id, milestone_text, 'referral_milestone')
-                
-                # 25th appointment → final reminder
-                elif total_appointments == 25:
-                    milestone_text = "🚀 25 patients booked! You still have invites for colleagues who need this."
-                    sheets.create_message(customer_id, milestone_text, 'referral_milestone')
+                total = sheets.count_doctor_appointments(appointment.doctor_id)
+                if total == 1:
+                    lang = doctor.get('language', 'en')
+                    text = get_notif_text('first_appointment', lang)
+                    sheets.create_message(doctor['customer_id'], text, 'system')
         except Exception as notif_error:
+            print(f"Notification error (non-blocking): {notif_error}")
             # Notification failure should never block the appointment
             print(f"Notification error (non-blocking): {notif_error}")
         
@@ -1119,6 +1150,15 @@ async def set_password(request: SetPasswordRequest):
         
         if not result['success']:
             raise HTTPException(status_code=500, detail="Failed to save user")
+        
+        # Welcome message
+        try:
+            doctor = sheets.get_doctor_by_customer_id(request.customer_id)
+            lang = doctor.get('language', 'en') if doctor else 'en'
+            text = get_notif_text('welcome', lang)
+            sheets.create_message(request.customer_id, text, 'system')
+        except Exception:
+            pass
         
         return {
             "success": True,
@@ -1491,6 +1531,13 @@ async def trial_signup(request: TrialSignupRequest):
         
         # Update invite status
         sheets.update_invite_status(slug, 'trial_started')
+        
+        # Welcome message
+        try:
+            text = get_notif_text('welcome', 'en')
+            sheets.create_message(trial_id, text, 'system')
+        except Exception:
+            pass
         
         return {
             "success": True,
