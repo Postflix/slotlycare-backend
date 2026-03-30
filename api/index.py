@@ -1770,7 +1770,7 @@ def send_notification_email(subject: str, body: str, to_email: str = None):
 
 
 def generate_activation_code(doctor_name: str) -> str:
-    """Generate a unique activation code like JM-3847."""
+    """Generate a unique activation code like JM3847 (no dash)."""
     # Extract initials from doctor name (skip Dr./Dra./Dr )
     clean = re.sub(r'^(Dr\.?a?|Dra?\.?)\s*', '', doctor_name, flags=re.IGNORECASE).strip()
     words = clean.split()
@@ -1781,7 +1781,7 @@ def generate_activation_code(doctor_name: str) -> str:
     else:
         initials = 'SC'
     numbers = ''.join(random.choices(string.digits, k=4))
-    return f"{initials}-{numbers}"
+    return f"{initials}{numbers}"
 
 
 # ==================== TRIAL PYDANTIC MODELS ====================
@@ -1943,7 +1943,7 @@ async def trial_activate(request: TrialActivateRequest):
         if not trial.get('activation_code'):
             raise HTTPException(status_code=400, detail="No activation code has been generated yet. Please request one first.")
 
-        if request.code.strip().upper() != trial['activation_code'].strip().upper():
+        if request.code.strip().upper().replace('-', '') != trial['activation_code'].strip().upper().replace('-', ''):
             raise HTTPException(status_code=401, detail="Invalid activation code")
 
         now = datetime.utcnow().isoformat()
