@@ -20,6 +20,11 @@ import unicodedata
 from datetime import datetime, timedelta, time
 from openai import OpenAI
 import stripe
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import string
+import random
 
 # Add parent directory to path to import sheets_client
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -1728,6 +1733,294 @@ async def save_opinion(request: OpinionRequest):
 
 # ==================== DM CARD GENERATOR INVITES ====================
 
+# ==================== EMAIL NOTIFICATION UTILITY ====================
+
+def send_notification_email(subject: str, body: str, to_email: str = None):
+    """
+    Send notification email via Namecheap Private Email SMTP.
+    If to_email is None, sends to NOTIFY_EMAIL (Renato).
+    """
+    smtp_host = os.environ.get('SMTP_HOST', 'mail.privateemail.com')
+    smtp_port = int(os.environ.get('SMTP_PORT', '587'))
+    smtp_user = os.environ.get('SMTP_USER', 'founders@slotlycare.com')
+    smtp_pass = os.environ.get('SMTP_PASS', '')
+    notify_email = to_email or os.environ.get('NOTIFY_EMAIL', 'founders@slotlycare.com')
+
+    if not smtp_pass:
+        print(f"SMTP_PASS not set — email not sent: {subject}")
+        return False
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = f"SlotlyCare <{smtp_user}>"
+        msg['To'] = notify_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+
+        print(f"Email sent: {subject} → {notify_email}")
+        return True
+    except Exception as e:
+        print(f"Email send failed: {e}")
+        return False
+
+
+def generate_activation_code(doctor_name: str) -> str:
+    """Generate a unique activation code like JM-3847."""
+    # Extract initials from doctor name (skip Dr./Dra./Dr )
+    clean = re.sub(r'^(Dr\.?a?|Dra?\.?)\s*', '', doctor_name, flags=re.IGNORECASE).strip()
+    words = clean.split()
+    if len(words) >= 2:
+        initials = (words[0][0] + words[-1][0]).upper()
+    elif len(words) == 1 and len(words[0]) >= 2:
+        initials = words[0][:2].upper()
+    else:
+        initials = 'SC'
+    numbers = ''.join(random.choices(string.digits, k=4))
+    return f"{initials}-{numbers}"
+
+
+# ==================== TRIAL PYDANTIC MODELS ====================
+
+class TrialVisitRequest(BaseModel):
+    slug: str
+
+class TrialRequestCodeRequest(BaseModel):
+    slug: str
+    doctor_email: str
+
+class TrialActivateRequest(BaseModel):
+    slug: str
+    code: str
+
+class TrialCheckRequest(BaseModel):
+    slug: str
+
+
+# ==================== TRIAL ENDPOINTS ====================
+
+@app.post("/api/trial/visit")
+async def trial_visit(request: TrialVisitRequest):
+    """
+    Record that a doctor opened their trial page.
+    Sends real-time email notification to Renato.
+    Only records the FIRST visit (doesn't overwrite).
+    """
+    try:
+        sheets = SheetsClient()
+
+        # Find the trial by slug
+        result = sheets.supabase.table('trials').select('*').eq('slug', request.slug).execute()
+
+        if not result.data or len(result.data) == 0:
+            raise HTTPException(status_code=404, detail="Trial not found")
+
+        trial = result.data[0]
+
+        # Only record first visit
+        if not trial.get('visited_at'):
+            now = datetime.utcnow().isoformat()
+            sheets.supabase.table('trials').update({
+                'visited_at': now,
+                'status': 'visited'
+            }).eq('slug', request.slug).execute()
+
+            # Send real-time notification to Renato
+            send_notification_email(
+                subject=f"👁️ {trial['doctor_name']} opened their page",
+                body=f"Doctor: {trial['doctor_name']}\nSlug: {request.slug}\nOpened at: {now}\n\nThey haven't requested a code yet. If no code request comes in 3 days, consider a follow-up."
+            )
+
+        return {"success": True, "status": "visited"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/trial/request-code")
+async def trial_request_code(request: TrialRequestCodeRequest):
+    """
+    Doctor submits their email to receive activation code.
+    Backend generates unique code, saves to Supabase, notifies Renato.
+    Renato then manually sends the code to the doctor.
+    """
+    try:
+        sheets = SheetsClient()
+
+        # Find the trial by slug
+        result = sheets.supabase.table('trials').select('*').eq('slug', request.slug).execute()
+
+        if not result.data or len(result.data) == 0:
+            raise HTTPException(status_code=404, detail="Trial not found")
+
+        trial = result.data[0]
+
+        # Check if code was already requested
+        if trial.get('activation_code'):
+            return {
+                "success": True,
+                "message": "Code already requested. Check your email.",
+                "already_requested": True
+            }
+
+        # Generate unique activation code
+        code = generate_activation_code(trial['doctor_name'])
+
+        # Ensure code is unique
+        code_check = sheets.supabase.table('trials').select('slug').eq('activation_code', code).execute()
+        attempts = 0
+        while code_check.data and len(code_check.data) > 0 and attempts < 10:
+            code = generate_activation_code(trial['doctor_name'])
+            code_check = sheets.supabase.table('trials').select('slug').eq('activation_code', code).execute()
+            attempts += 1
+
+        now = datetime.utcnow().isoformat()
+
+        # Save code and email to Supabase
+        sheets.supabase.table('trials').update({
+            'doctor_email': request.doctor_email,
+            'activation_code': code,
+            'code_requested_at': now,
+            'status': 'pending'
+        }).eq('slug', request.slug).execute()
+
+        # Send notification to Renato with everything he needs
+        send_notification_email(
+            subject=f"🔑 {trial['doctor_name']} wants to activate!",
+            body=(
+                f"Doctor: {trial['doctor_name']}\n"
+                f"Slug: {request.slug}\n"
+                f"Email: {request.doctor_email}\n"
+                f"Activation code: {code}\n"
+                f"Requested at: {now}\n\n"
+                f"→ Copy the code above and reply to {request.doctor_email}"
+            )
+        )
+
+        return {
+            "success": True,
+            "message": "Code request received. You will receive your activation code shortly."
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/trial/activate")
+async def trial_activate(request: TrialActivateRequest):
+    """
+    Doctor enters the activation code.
+    Validates code, activates trial (7 days start now).
+    """
+    try:
+        sheets = SheetsClient()
+
+        # Find the trial by slug
+        result = sheets.supabase.table('trials').select('*').eq('slug', request.slug).execute()
+
+        if not result.data or len(result.data) == 0:
+            raise HTTPException(status_code=404, detail="Trial not found")
+
+        trial = result.data[0]
+
+        # Check if already active
+        if trial.get('status') == 'active':
+            return {"success": True, "message": "Trial already active", "already_active": True}
+
+        # Check if expired
+        if trial.get('status') == 'expired':
+            raise HTTPException(status_code=403, detail="Trial has expired")
+
+        # Validate code
+        if not trial.get('activation_code'):
+            raise HTTPException(status_code=400, detail="No activation code has been generated yet. Please request one first.")
+
+        if request.code.strip().upper() != trial['activation_code'].strip().upper():
+            raise HTTPException(status_code=401, detail="Invalid activation code")
+
+        now = datetime.utcnow().isoformat()
+
+        # Activate trial
+        sheets.supabase.table('trials').update({
+            'activated_at': now,
+            'status': 'active'
+        }).eq('slug', request.slug).execute()
+
+        # Notify Renato
+        send_notification_email(
+            subject=f"✅ {trial['doctor_name']} activated their trial!",
+            body=(
+                f"Doctor: {trial['doctor_name']}\n"
+                f"Slug: {request.slug}\n"
+                f"Email: {trial.get('doctor_email', 'N/A')}\n"
+                f"Activated at: {now}\n"
+                f"Trial expires: 7 days from now\n\n"
+                f"The clock is ticking."
+            )
+        )
+
+        return {
+            "success": True,
+            "message": "Trial activated! You have 7 days of full access.",
+            "activated_at": now
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/trial/check")
+async def trial_check(request: TrialCheckRequest):
+    """
+    Check trial status and remaining days.
+    Used by the frontend to determine what to show.
+    """
+    try:
+        sheets = SheetsClient()
+
+        result = sheets.supabase.table('trials').select('*').eq('slug', request.slug).execute()
+
+        if not result.data or len(result.data) == 0:
+            raise HTTPException(status_code=404, detail="Trial not found")
+
+        trial = result.data[0]
+
+        response = {
+            "success": True,
+            "slug": trial['slug'],
+            "doctor_name": trial['doctor_name'],
+            "status": trial['status'],
+            "has_code": bool(trial.get('activation_code')),
+            "days_remaining": None
+        }
+
+        # Calculate remaining days if active
+        if trial.get('activated_at') and trial['status'] == 'active':
+            activated = datetime.fromisoformat(trial['activated_at'].replace('Z', '+00:00'))
+            expires = activated + timedelta(days=7)
+            remaining = (expires - datetime.now(activated.tzinfo)).days
+            response['days_remaining'] = max(0, remaining)
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== DM CARD GENERATOR INVITES (continued) ====================
+
 class DmInviteItem(BaseModel):
     name: str
     specialty: Optional[str] = ""
@@ -1779,6 +2072,7 @@ async def dm_invites(request: DmInvitesRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 
 
 # ==================== VERCEL HANDLER ====================
