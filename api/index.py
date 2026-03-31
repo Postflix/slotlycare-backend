@@ -1967,6 +1967,25 @@ async def trial_activate(request: TrialActivateRequest):
             )
         )
 
+        # Send panel link to the doctor
+        doctor_email = trial.get('doctor_email')
+        if doctor_email:
+            panel_link = f"https://slotlycare.com/painel?trial={request.slug}"
+            send_notification_email(
+                subject=f"🔐 Your SlotlyCare panel is ready",
+                body=(
+                    f"Welcome, {trial['doctor_name']}!\n\n"
+                    f"Your panel is unlocked and ready to use. "
+                    f"Bookmark this link — it's your access to everything:\n\n"
+                    f"{panel_link}\n\n"
+                    f"You have 7 days to explore. Describe your schedule in your own words "
+                    f"and let AI generate your availability automatically.\n\n"
+                    f"If you need anything, reply to this email.\n\n"
+                    f"— The SlotlyCare Team"
+                ),
+                to_email=doctor_email
+            )
+
         return {
             "success": True,
             "message": "Trial activated! You have 7 days of full access.",
